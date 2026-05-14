@@ -4,23 +4,34 @@ import {
   Suspense,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState
 } from 'react'
 import { Bounds, Center, Environment, Grid, OrbitControls } from '@react-three/drei'
-import { Canvas, ThreeEvent } from '@react-three/fiber'
+import { Canvas, ThreeEvent, useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
 import { useTextureToolStore } from '../store'
 
+export interface ViewportCameraState {
+  position: [number, number, number]
+  quaternion: [number, number, number, number]
+  target: [number, number, number]
+  fov: number
+  zoom: number
+}
+
 export interface ModelViewerHandle {
   getTextureDataUrl: () => string | null
   getProjectionViewDataUrl: () => string | null
+  getViewportState: () => ViewportCameraState | null
 }
 
 interface ModelViewerProps {
   projectionWindow?: boolean
+  initialViewState?: ViewportCameraState | null
 }
 
 interface RgbaColor {
@@ -52,7 +63,7 @@ async function decodeTextureDataUrl(dataUrl: string): Promise<ImageBitmap> {
 }
 
 export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(function ModelViewer(
-  { projectionWindow = false },
+  { projectionWindow = false, initialViewState = null },
   ref
 ): ReactElement {
   const textureCanvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -63,6 +74,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
   const projectionSamplerRef = useRef<HTMLCanvasElement | null>(null)
   const projectionContextRef = useRef<CanvasRenderingContext2D | null>(null)
   const projectionImageDataRef = useRef<ImageData | null>(null)
+  const viewportCameraStateRef = useRef<ViewportCameraState | null>(initialViewState)
   const raycasterRef = useRef(new THREE.Raycaster())
   const drawingRef = useRef(false)
   const lastUvUpdateAtRef = useRef(0)
@@ -102,7 +114,8 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
 
   useImperativeHandle(ref, () => ({
     getTextureDataUrl: () => textureCanvasRef.current?.toDataURL('image/png') ?? null,
-    getProjectionViewDataUrl: () => captureProjectionView()
+    getProjectionViewDataUrl: () => captureProjectionView(),
+    getViewportState: () => cloneViewportCameraState(viewportCameraStateRef.current)
   }))
 
   useEffect(() => {
@@ -214,6 +227,10 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
     window.addEventListener('pointerup', finishStroke)
     return () => window.removeEventListener('pointerup', finishStroke)
   }, [setLastUv])
+
+  function updateViewportCameraState(nextState: ViewportCameraState): void {
+    viewportCameraStateRef.current = cloneViewportCameraState(nextState)
+  }
 
   function paintFromEvent(event: ThreeEvent<PointerEvent>): void {
     if (mode === 'orbit') {
@@ -594,6 +611,9 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
             texture={editableTexture}
             textureRevision={textureRevision}
             controlsEnabled={false}
+            fitToBounds={false}
+            initialViewState={initialViewState}
+            onViewStateChange={updateViewportCameraState}
           />
           {projectionImage && (
             <img
@@ -619,6 +639,8 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
           texture={editableTexture}
           textureRevision={textureRevision}
           controlsEnabled={!paintableFromMainViewport}
+          fitToBounds
+          onViewStateChange={updateViewportCameraState}
           onPointerDown={
             paintableFromMainViewport
               ? (event) => {
@@ -649,6 +671,9 @@ interface ViewportSceneProps {
   texture: THREE.Texture
   textureRevision: number
   controlsEnabled: boolean
+  fitToBounds?: boolean
+  initialViewState?: ViewportCameraState | null
+  onViewStateChange?: (state: ViewportCameraState) => void
   onPointerDown?: (event: ThreeEvent<PointerEvent>) => void
   onPointerMove?: (event: ThreeEvent<PointerEvent>) => void
   onMissingUv?: () => void
@@ -659,6 +684,9 @@ function ViewportScene({
   texture,
   textureRevision,
   controlsEnabled,
+  fitToBounds = true,
+  initialViewState = null,
+  onViewStateChange,
   onPointerDown,
   onPointerMove,
   onMissingUv
@@ -670,10 +698,15 @@ function ViewportScene({
       gl={{ antialias: true, preserveDrawingBuffer: true }}
     >
       <color attach="background" args={['#e9e6dc']} />
+      <CameraStateController
+        controlsEnabled={controlsEnabled}
+        initialViewState={initialViewState}
+        onViewStateChange={onViewStateChange}
+      />
       <Suspense fallback={null}>
         <Environment preset="studio" />
-        {modelContent ? (
-          <Bounds fit clip observe margin={1.15}>
+        {modelContent && fitToBounds ? (
+          <Bounds fit clip observe margin={1.15} maxDuration={0.0001} interpolateFunc={() => 1}>
             <Center>
               <LoadedObj
                 objContent={modelContent}
@@ -685,6 +718,17 @@ function ViewportScene({
               />
             </Center>
           </Bounds>
+        ) : modelContent ? (
+          <Center>
+            <LoadedObj
+              objContent={modelContent}
+              texture={texture}
+              textureRevision={textureRevision}
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onMissingUv={onMissingUv}
+            />
+          </Center>
         ) : (
           <EmptyScene />
         )}
@@ -701,9 +745,79 @@ function ViewportScene({
         fadeDistance={9}
         fadeStrength={1}
       />
-      {controlsEnabled && <OrbitControls makeDefault />}
     </Canvas>
   )
+}
+
+function CameraStateController({
+  controlsEnabled,
+  initialViewState,
+  onViewStateChange
+}: {
+  controlsEnabled: boolean
+  initialViewState: ViewportCameraState | null
+  onViewStateChange?: (state: ViewportCameraState) => void
+}): ReactElement | null {
+  const { camera } = useThree()
+  const controlsRef = useRef<any>(null)
+  const fallbackTargetRef = useRef(new THREE.Vector3(0, 0, 0))
+  const appliedStateRef = useRef<string | null>(null)
+  const lastReportAtRef = useRef(0)
+
+  useLayoutEffect(() => {
+    if (!initialViewState) {
+      return
+    }
+
+    const signature = serializeViewportCameraState(initialViewState)
+    if (appliedStateRef.current === signature) {
+      return
+    }
+
+    applyViewportCameraState(camera, initialViewState)
+    fallbackTargetRef.current.set(...initialViewState.target)
+
+    if (controlsRef.current?.target) {
+      controlsRef.current.target.set(...initialViewState.target)
+      controlsRef.current.update()
+    }
+
+    appliedStateRef.current = signature
+    onViewStateChange?.(readViewportCameraState(camera, controlsRef.current?.target ?? fallbackTargetRef.current))
+  }, [camera, initialViewState, onViewStateChange])
+
+  useEffect(() => {
+    const controls = controlsRef.current
+    if (!controls || !onViewStateChange) {
+      return
+    }
+
+    const handleChange = (): void => {
+      fallbackTargetRef.current.copy(controls.target)
+      onViewStateChange(readViewportCameraState(camera, controls.target))
+    }
+
+    controls.addEventListener('change', handleChange)
+    handleChange()
+
+    return () => controls.removeEventListener('change', handleChange)
+  }, [camera, onViewStateChange])
+
+  useFrame(() => {
+    if (!onViewStateChange) {
+      return
+    }
+
+    const now = performance.now()
+    if (now - lastReportAtRef.current < 120) {
+      return
+    }
+
+    lastReportAtRef.current = now
+    onViewStateChange(readViewportCameraState(camera, controlsRef.current?.target ?? fallbackTargetRef.current))
+  })
+
+  return controlsEnabled ? <OrbitControls ref={controlsRef} makeDefault enableDamping={false} /> : null
 }
 
 interface LoadedObjProps {
@@ -933,6 +1047,74 @@ function getCenteredSquareCrop(width: number, height: number): { x: number; y: n
     y: (height - size) / 2,
     size
   }
+}
+
+function readViewportCameraState(camera: THREE.Camera, target: THREE.Vector3): ViewportCameraState {
+  return {
+    position: vectorToTuple(camera.position),
+    quaternion: quaternionToTuple(camera.quaternion),
+    target: vectorToTuple(target),
+    fov: camera instanceof THREE.PerspectiveCamera ? camera.fov : 45,
+    zoom: getCameraZoom(camera)
+  }
+}
+
+function applyViewportCameraState(camera: THREE.Camera, state: ViewportCameraState): void {
+  camera.position.set(...state.position)
+  camera.quaternion.set(...state.quaternion)
+
+  if (camera instanceof THREE.PerspectiveCamera) {
+    camera.fov = state.fov
+    camera.zoom = state.zoom
+    camera.updateProjectionMatrix()
+  } else if (camera instanceof THREE.OrthographicCamera) {
+    camera.zoom = state.zoom
+    camera.updateProjectionMatrix()
+  }
+
+  camera.updateMatrixWorld()
+}
+
+function getCameraZoom(camera: THREE.Camera): number {
+  if (camera instanceof THREE.PerspectiveCamera || camera instanceof THREE.OrthographicCamera) {
+    return camera.zoom
+  }
+
+  return 1
+}
+
+function cloneViewportCameraState(state: ViewportCameraState | null): ViewportCameraState | null {
+  if (!state) {
+    return null
+  }
+
+  return {
+    position: [...state.position],
+    quaternion: [...state.quaternion],
+    target: [...state.target],
+    fov: state.fov,
+    zoom: state.zoom
+  }
+}
+
+function serializeViewportCameraState(state: ViewportCameraState): string {
+  return [
+    ...state.position,
+    ...state.quaternion,
+    ...state.target,
+    state.fov,
+    state.zoom
+  ]
+    .map((value) => value.toFixed(5))
+    .join(',')
+}
+
+function vectorToTuple(vector: THREE.Vector3): [number, number, number] {
+  return [vector.x, vector.y, vector.z]
+}
+
+function quaternionToTuple(quaternion: THREE.Quaternion): [number, number, number, number] {
+  return [quaternion.x, quaternion.y, quaternion.z, quaternion.w]
 }
 
 function hexToRgba(hex: string): RgbaColor {

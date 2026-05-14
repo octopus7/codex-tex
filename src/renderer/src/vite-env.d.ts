@@ -17,6 +17,14 @@ export interface InitialAssets {
   texture: LoadedTexture | null
 }
 
+export interface ViewportCameraState {
+  position: [number, number, number]
+  quaternion: [number, number, number, number]
+  target: [number, number, number]
+  fov: number
+  zoom: number
+}
+
 export interface TextureToolApi {
   loadInitialAssets: () => Promise<InitialAssets>
   openObj: () => Promise<LoadedObj | null>
@@ -28,7 +36,10 @@ export interface TextureToolApi {
   }) => Promise<{ capturePath: string; createdPath: string }>
   getProjectionPaths: (albedoPath?: string | null) => Promise<{ capturePath: string; createdPath: string }>
   loadProjectionCapture: (path?: string) => Promise<LoadedTexture>
-  openProjectionWindow: () => Promise<boolean>
+  openProjectionWindow: (viewState?: ViewportCameraState | null) => Promise<boolean>
+  getProjectionViewState: () => Promise<ViewportCameraState | null>
+  onProjectionViewState: (callback: (viewState: ViewportCameraState | null) => void) => () => void
+  onProjectionImageLoaded: (callback: (projectionImage: LoadedTexture) => void) => () => void
   resetWorkspace: () => Promise<boolean>
   onResetWorkspace: (callback: () => void) => () => void
   saveTexture: (dataUrl: string, suggestedName?: string) => Promise<string | null>

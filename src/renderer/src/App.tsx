@@ -1,7 +1,6 @@
 import { type ReactElement, useEffect, useRef, useState } from 'react'
 import {
   Brush,
-  Camera,
   Download,
   Eraser,
   Image,
@@ -12,7 +11,7 @@ import {
   SlidersHorizontal,
   Upload
 } from 'lucide-react'
-import { ModelViewer, type ModelViewerHandle } from './viewport/ModelViewer'
+import { ModelViewer, type ModelViewerHandle, type ViewportCameraState } from './viewport/ModelViewer'
 import { useTextureToolStore, type ToolMode } from './store'
 
 const modeOptions: Array<{ mode: ToolMode; label: string; icon: typeof MousePointer2 }> = [
@@ -43,6 +42,7 @@ function MainWindow(): ReactElement {
     status,
     setModel,
     setTexture,
+    setProjectionImage,
     setMode,
     setBrushColor,
     setBrushSize,
@@ -82,12 +82,16 @@ function MainWindow(): ReactElement {
     const removeResetListener = window.textureTool.onResetWorkspace(() => {
       resetWorkspace()
     })
+    const removeProjectionImageListener = window.textureTool.onProjectionImageLoaded((nextProjectionImage) => {
+      setProjectionImage(nextProjectionImage)
+    })
 
     return () => {
       alive = false
+      removeProjectionImageListener()
       removeResetListener()
     }
-  }, [resetWorkspace, setModel, setStatus, setTexture])
+  }, [resetWorkspace, setModel, setProjectionImage, setStatus, setTexture])
 
   async function handleOpenObj(): Promise<void> {
     const nextModel = await window.textureTool.openObj()
@@ -110,7 +114,7 @@ function MainWindow(): ReactElement {
   }
 
   async function handleOpenProjectionWindow(): Promise<void> {
-    await window.textureTool.openProjectionWindow()
+    await window.textureTool.openProjectionWindow(viewerRef.current?.getViewportState() ?? null)
   }
 
   async function handleExport(): Promise<void> {
@@ -292,8 +296,12 @@ function MainWindow(): ReactElement {
 
 function ProjectionWindow(): ReactElement {
   const viewerRef = useRef<ModelViewerHandle>(null)
+  const autoCapturedRef = useRef(false)
   const [isBusy, setIsBusy] = useState(false)
+  const [initialAssetsReady, setInitialAssetsReady] = useState(false)
   const [projectionCreatedPath, setProjectionCreatedPath] = useState<string | null>(null)
+  const [initialViewState, setInitialViewState] = useState<ViewportCameraState | null>(null)
+  const model = useTextureToolStore((state) => state.model)
   const texture = useTextureToolStore((state) => state.texture)
   const setModel = useTextureToolStore((state) => state.setModel)
   const setTexture = useTextureToolStore((state) => state.setTexture)
@@ -304,7 +312,10 @@ function ProjectionWindow(): ReactElement {
     let alive = true
 
     async function restoreInitialAssets(): Promise<void> {
-      const initialAssets = await window.textureTool.loadInitialAssets()
+      const [initialAssets, projectionViewState] = await Promise.all([
+        window.textureTool.loadInitialAssets(),
+        window.textureTool.getProjectionViewState()
+      ])
       if (!alive) {
         return
       }
@@ -316,20 +327,54 @@ function ProjectionWindow(): ReactElement {
       if (initialAssets.texture) {
         setTexture(initialAssets.texture)
       }
+
+      setInitialViewState(projectionViewState)
+      setInitialAssetsReady(true)
     }
 
     void restoreInitialAssets()
 
+    const removeProjectionViewStateListener = window.textureTool.onProjectionViewState((viewState) => {
+      setInitialViewState(viewState)
+    })
+
     const removeResetListener = window.textureTool.onResetWorkspace(() => {
+      autoCapturedRef.current = false
+      setInitialAssetsReady(false)
       setProjectionCreatedPath(null)
       resetWorkspace()
     })
 
     return () => {
       alive = false
+      removeProjectionViewStateListener()
       removeResetListener()
     }
   }, [resetWorkspace, setModel, setTexture])
+
+  useEffect(() => {
+    if (!initialAssetsReady || !model || autoCapturedRef.current) {
+      return
+    }
+
+    let cancelled = false
+    autoCapturedRef.current = true
+
+    async function captureAfterOpen(): Promise<void> {
+      await waitForRenderFrames(4)
+      if (cancelled) {
+        return
+      }
+
+      await captureProjectionView()
+    }
+
+    void captureAfterOpen()
+
+    return () => {
+      cancelled = true
+    }
+  }, [initialAssetsReady, initialViewState, model, texture?.path])
 
   async function resolveProjectionCreatedPath(): Promise<string> {
     if (projectionCreatedPath) {
@@ -342,7 +387,7 @@ function ProjectionWindow(): ReactElement {
     return paths.createdPath
   }
 
-  async function handleCapture(): Promise<void> {
+  async function captureProjectionView(): Promise<void> {
     if (isBusy) {
       return
     }
@@ -389,10 +434,6 @@ function ProjectionWindow(): ReactElement {
       <header className="projection-window-toolbar">
         <strong>Projection View</strong>
         <div className="projection-window-actions">
-          <button type="button" className="tool-button" onClick={handleCapture} disabled={isBusy} title="Capture">
-            <Camera size={18} />
-            <span>Capture</span>
-          </button>
           <button type="button" className="tool-button" onClick={handleReload} disabled={isBusy} title="Reload">
             <RefreshCw size={18} />
             <span>Reload</span>
@@ -400,8 +441,23 @@ function ProjectionWindow(): ReactElement {
         </div>
       </header>
       <section className="projection-window-stage">
-        <ModelViewer ref={viewerRef} projectionWindow />
+        <ModelViewer ref={viewerRef} projectionWindow initialViewState={initialViewState} />
       </section>
     </main>
   )
+}
+
+function waitForRenderFrames(count: number): Promise<void> {
+  return new Promise((resolve) => {
+    function next(remaining: number): void {
+      if (remaining <= 0) {
+        resolve()
+        return
+      }
+
+      requestAnimationFrame(() => next(remaining - 1))
+    }
+
+    next(count)
+  })
 }

@@ -17,7 +17,16 @@ interface ProjectionCaptureResult {
   createdPath: string
 }
 
+interface ViewportCameraState {
+  position: [number, number, number]
+  quaternion: [number, number, number, number]
+  target: [number, number, number]
+  fov: number
+  zoom: number
+}
+
 let projectionWindow: BrowserWindow | null = null
+let projectionViewState: ViewportCameraState | null = null
 
 const imageMimeByExtension = new Map([
   ['.png', 'image/png'],
@@ -115,6 +124,20 @@ function loadRendererWindow(targetWindow: BrowserWindow, hash?: string): void {
   }
 }
 
+function cloneViewportCameraState(viewState?: ViewportCameraState | null): ViewportCameraState | null {
+  if (!viewState) {
+    return null
+  }
+
+  return {
+    position: [...viewState.position],
+    quaternion: [...viewState.quaternion],
+    target: [...viewState.target],
+    fov: viewState.fov,
+    zoom: viewState.zoom
+  }
+}
+
 function setupApplicationMenu(): void {
   const menu = Menu.buildFromTemplate([
     {
@@ -178,8 +201,11 @@ function createWindow(): void {
   loadRendererWindow(mainWindow)
 }
 
-function openProjectionWindow(parent?: BrowserWindow | null): void {
+function openProjectionWindow(parent?: BrowserWindow | null, viewState?: ViewportCameraState | null): void {
+  projectionViewState = cloneViewportCameraState(viewState)
+
   if (projectionWindow && !projectionWindow.isDestroyed()) {
+    projectionWindow.webContents.send('app:projection-view-state', projectionViewState)
     projectionWindow.focus()
     return
   }
@@ -202,6 +228,10 @@ function openProjectionWindow(parent?: BrowserWindow | null): void {
 
   projectionWindow.on('closed', () => {
     projectionWindow = null
+  })
+
+  projectionWindow.webContents.once('did-finish-load', () => {
+    projectionWindow?.webContents.send('app:projection-view-state', projectionViewState)
   })
 
   loadRendererWindow(projectionWindow, 'projection')
@@ -282,12 +312,21 @@ ipcMain.handle('asset:get-projection-paths', async (_event, albedoPath?: string 
 })
 
 ipcMain.handle('asset:load-projection-capture', async (_event, path?: string) => {
-  return loadTextureFromPath(path ?? join(app.getPath('userData'), 'projection-created.png'))
+  const loadedProjectionImage = await loadTextureFromPath(path ?? join(app.getPath('userData'), 'projection-created.png'))
+  BrowserWindow.getAllWindows().forEach((targetWindow) => {
+    targetWindow.webContents.send('asset:projection-image-loaded', loadedProjectionImage)
+  })
+
+  return loadedProjectionImage
 })
 
-ipcMain.handle('app:open-projection-window', async (event) => {
-  openProjectionWindow(BrowserWindow.fromWebContents(event.sender))
+ipcMain.handle('app:open-projection-window', async (event, viewState?: ViewportCameraState | null) => {
+  openProjectionWindow(BrowserWindow.fromWebContents(event.sender), viewState)
   return true
+})
+
+ipcMain.handle('app:get-projection-view-state', async () => {
+  return cloneViewportCameraState(projectionViewState)
 })
 
 ipcMain.handle('asset:load-initial-assets', async () => {
