@@ -177,9 +177,9 @@ export function App(): ReactElement {
     <main className="app-shell">
       <section className="workspace">
         <header className="topbar">
-          <div>
+          <div className="topbar-title">
             <h1>Codex Tex</h1>
-            <p>{status}</p>
+            <p title={status}>{status}</p>
           </div>
           <div className="topbar-actions">
             <button type="button" className="tool-button" onClick={handleOpenObj} title="Open OBJ">
