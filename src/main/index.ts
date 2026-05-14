@@ -12,6 +12,11 @@ interface ProjectionCapturePayload {
   albedoPath?: string | null
 }
 
+interface ProjectionCaptureResult {
+  capturePath: string
+  createdPath: string
+}
+
 const imageMimeByExtension = new Map([
   ['.png', 'image/png'],
   ['.jpg', 'image/jpeg'],
@@ -77,15 +82,20 @@ function dataUrlToBuffer(dataUrl: string): Buffer {
   return Buffer.from(match[2], 'base64')
 }
 
+function getProjectionDirectory(albedoPath?: string | null): string {
+  return albedoPath ? dirname(albedoPath) : app.getPath('userData')
+}
+
 async function saveProjectionCapture({
   projectionViewDataUrl,
   albedoPath
-}: ProjectionCapturePayload): Promise<{ path: string }> {
-  const outputDirectory = albedoPath ? dirname(albedoPath) : app.getPath('userData')
-  const generatedPath = join(outputDirectory, 'projection-capture.png')
-  await writeFile(generatedPath, dataUrlToBuffer(projectionViewDataUrl))
+}: ProjectionCapturePayload): Promise<ProjectionCaptureResult> {
+  const outputDirectory = getProjectionDirectory(albedoPath)
+  const capturePath = join(outputDirectory, 'projection-capture.png')
+  const createdPath = join(outputDirectory, 'projection-created.png')
+  await writeFile(capturePath, dataUrlToBuffer(projectionViewDataUrl))
 
-  return { path: generatedPath }
+  return { capturePath, createdPath }
 }
 
 function setupApplicationMenu(mainWindow: BrowserWindow): void {
@@ -224,7 +234,7 @@ ipcMain.handle('asset:save-projection-capture', async (_event, payload: Projecti
 })
 
 ipcMain.handle('asset:load-projection-capture', async (_event, path?: string) => {
-  return loadTextureFromPath(path ?? join(app.getPath('userData'), 'projection-capture.png'))
+  return loadTextureFromPath(path ?? join(app.getPath('userData'), 'projection-created.png'))
 })
 
 ipcMain.handle('asset:load-initial-assets', async () => {
