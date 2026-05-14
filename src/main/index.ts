@@ -7,6 +7,12 @@ interface RecentAssets {
   texturePath?: string
 }
 
+interface LoadedTexture {
+  name: string
+  path: string
+  dataUrl: string
+}
+
 interface ProjectionCapturePayload {
   projectionViewDataUrl: string
   albedoPath?: string | null
@@ -136,6 +142,20 @@ function cloneViewportCameraState(viewState?: ViewportCameraState | null): Viewp
     fov: viewState.fov,
     zoom: viewState.zoom
   }
+}
+
+function isLoadedTexture(value: unknown): value is LoadedTexture {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+
+  const texture = value as Partial<LoadedTexture>
+
+  return (
+    typeof texture.name === 'string' &&
+    typeof texture.path === 'string' &&
+    typeof texture.dataUrl === 'string'
+  )
 }
 
 function setupApplicationMenu(): void {
@@ -318,6 +338,20 @@ ipcMain.handle('asset:load-projection-capture', async (_event, path?: string) =>
   })
 
   return loadedProjectionImage
+})
+
+ipcMain.on('asset:texture-updated', (event, nextTexture: LoadedTexture) => {
+  if (!isLoadedTexture(nextTexture)) {
+    return
+  }
+
+  BrowserWindow.getAllWindows().forEach((targetWindow) => {
+    if (targetWindow.webContents === event.sender) {
+      return
+    }
+
+    targetWindow.webContents.send('asset:texture-updated', nextTexture)
+  })
 })
 
 ipcMain.handle('app:open-projection-window', async (event, viewState?: ViewportCameraState | null) => {

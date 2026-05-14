@@ -77,6 +77,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
   const viewportCameraStateRef = useRef<ViewportCameraState | null>(initialViewState)
   const raycasterRef = useRef(new THREE.Raycaster())
   const drawingRef = useRef(false)
+  const strokeChangedRef = useRef(false)
   const lastUvUpdateAtRef = useRef(0)
   const pendingLastUvRef = useRef<string | null>(null)
   const statusUpdateAtRef = useRef(0)
@@ -220,13 +221,21 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
 
   useEffect(() => {
     function finishStroke(): void {
+      const shouldPublishTexture =
+        drawingRef.current && strokeChangedRef.current && projectionWindow && mode === 'projectionPaint'
+
       drawingRef.current = false
+      strokeChangedRef.current = false
       flushPendingLastUv()
+
+      if (shouldPublishTexture) {
+        publishEditedTexture()
+      }
     }
 
     window.addEventListener('pointerup', finishStroke)
     return () => window.removeEventListener('pointerup', finishStroke)
-  }, [setLastUv])
+  }, [mode, projectionWindow, setLastUv, texture])
 
   function updateViewportCameraState(nextState: ViewportCameraState): void {
     viewportCameraStateRef.current = cloneViewportCameraState(nextState)
@@ -261,6 +270,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
       })
     }
     uploadEditableTexture()
+    strokeChangedRef.current = true
     reportLastUv(event.uv)
   }
 
@@ -328,6 +338,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
     }
 
     uploadEditableTexture()
+    strokeChangedRef.current = true
     reportLastUv(centerUv)
   }
 
@@ -535,6 +546,18 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
     textureMap.needsUpdate = true
   }
 
+  function publishEditedTexture(): void {
+    const canvas = textureCanvasRef.current
+    if (!canvas || !texture) {
+      return
+    }
+
+    window.textureTool.publishTextureUpdate({
+      ...texture,
+      dataUrl: canvas.toDataURL('image/png')
+    })
+  }
+
   function reportLastUv(uv: THREE.Vector2): void {
     pendingLastUvRef.current = `${uv.x.toFixed(3)}, ${uv.y.toFixed(3)}`
 
@@ -600,6 +623,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
   }
 
   const paintableFromMainViewport = mode === 'paint' || mode === 'erase'
+  const projectionPaintEnabled = mode === 'projectionPaint'
 
   if (projectionWindow) {
     return (
@@ -614,6 +638,24 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
             fitToBounds={false}
             initialViewState={initialViewState}
             onViewStateChange={updateViewportCameraState}
+            onPointerDown={
+              projectionPaintEnabled
+                ? (event) => {
+                    drawingRef.current = true
+                    paintFromEvent(event)
+                  }
+                : undefined
+            }
+            onPointerMove={
+              projectionPaintEnabled
+                ? (event) => {
+                    if (drawingRef.current) {
+                      paintFromEvent(event)
+                    }
+                  }
+                : undefined
+            }
+            onMissingUv={() => setStatus('The selected mesh has no UV at the pointer hit.')}
           />
           {projectionImage && (
             <img

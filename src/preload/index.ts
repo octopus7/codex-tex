@@ -41,6 +41,13 @@ const api = {
 
     return () => ipcRenderer.removeListener('asset:projection-image-loaded', listener)
   },
+  publishTextureUpdate: (texture: LoadedTexture) => ipcRenderer.send('asset:texture-updated', texture),
+  onTextureUpdated: (callback: (texture: LoadedTexture) => void) => {
+    const listener = (_event: IpcRendererEvent, texture: LoadedTexture): void => callback(texture)
+    ipcRenderer.on('asset:texture-updated', listener)
+
+    return () => ipcRenderer.removeListener('asset:texture-updated', listener)
+  },
   resetWorkspace: () => ipcRenderer.invoke('asset:reset-workspace'),
   onResetWorkspace: (callback: () => void) => {
     const listener = (): void => callback()

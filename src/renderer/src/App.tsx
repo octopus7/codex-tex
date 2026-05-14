@@ -14,10 +14,9 @@ import {
 import { ModelViewer, type ModelViewerHandle, type ViewportCameraState } from './viewport/ModelViewer'
 import { useTextureToolStore, type ToolMode } from './store'
 
-const modeOptions: Array<{ mode: ToolMode; label: string; icon: typeof MousePointer2 }> = [
+const mainModeOptions: Array<{ mode: Exclude<ToolMode, 'projectionPaint'>; label: string; icon: typeof MousePointer2 }> = [
   { mode: 'orbit', label: 'Orbit', icon: Rotate3D },
   { mode: 'paint', label: 'Paint', icon: Brush },
-  { mode: 'projectionPaint', label: 'Projection', icon: Layers },
   { mode: 'erase', label: 'Erase', icon: Eraser }
 ]
 
@@ -36,7 +35,6 @@ function MainWindow(): ReactElement {
     brushSize,
     brushStrength,
     brushHardness,
-    projectionOpacity,
     textureResolution,
     lastUv,
     status,
@@ -48,7 +46,6 @@ function MainWindow(): ReactElement {
     setBrushSize,
     setBrushStrength,
     setBrushHardness,
-    setProjectionOpacity,
     setStatus,
     resetWorkspace
   } = useTextureToolStore()
@@ -85,9 +82,14 @@ function MainWindow(): ReactElement {
     const removeProjectionImageListener = window.textureTool.onProjectionImageLoaded((nextProjectionImage) => {
       setProjectionImage(nextProjectionImage)
     })
+    const removeTextureUpdateListener = window.textureTool.onTextureUpdated((nextTexture) => {
+      setTexture(nextTexture)
+      setStatus(`Updated ${nextTexture.name} from Projection View`)
+    })
 
     return () => {
       alive = false
+      removeTextureUpdateListener()
       removeProjectionImageListener()
       removeResetListener()
     }
@@ -174,7 +176,7 @@ function MainWindow(): ReactElement {
             <span>Tool</span>
           </div>
           <div className="segmented-control" role="group" aria-label="Tool mode">
-            {modeOptions.map((option) => {
+            {mainModeOptions.map((option) => {
               const Icon = option.icon
               const active = mode === option.mode
               return (
@@ -183,7 +185,7 @@ function MainWindow(): ReactElement {
                   type="button"
                   className={active ? 'active' : ''}
                   onClick={() => setMode(option.mode)}
-                  title={option.mode === 'projectionPaint' ? 'Projection Paint' : option.label}
+                  title={option.label}
                 >
                   <Icon size={17} />
                   <span>{option.label}</span>
@@ -245,24 +247,6 @@ function MainWindow(): ReactElement {
 
         <section className="panel-section">
           <div className="section-title">
-            <Layers size={16} />
-            <span>Projection</span>
-          </div>
-
-          <label className="control-block">
-            <span>Overlay {Math.round(projectionOpacity * 100)}%</span>
-            <input
-              type="range"
-              min="0"
-              max="100"
-              value={Math.round(projectionOpacity * 100)}
-              onChange={(event) => setProjectionOpacity(Number(event.currentTarget.value) / 100)}
-            />
-          </label>
-        </section>
-
-        <section className="panel-section">
-          <div className="section-title">
             <MousePointer2 size={16} />
             <span>Asset</span>
           </div>
@@ -303,10 +287,18 @@ function ProjectionWindow(): ReactElement {
   const [initialViewState, setInitialViewState] = useState<ViewportCameraState | null>(null)
   const model = useTextureToolStore((state) => state.model)
   const texture = useTextureToolStore((state) => state.texture)
+  const mode = useTextureToolStore((state) => state.mode)
+  const projectionOpacity = useTextureToolStore((state) => state.projectionOpacity)
   const setModel = useTextureToolStore((state) => state.setModel)
   const setTexture = useTextureToolStore((state) => state.setTexture)
   const setProjectionImage = useTextureToolStore((state) => state.setProjectionImage)
+  const setMode = useTextureToolStore((state) => state.setMode)
+  const setProjectionOpacity = useTextureToolStore((state) => state.setProjectionOpacity)
   const resetWorkspace = useTextureToolStore((state) => state.resetWorkspace)
+
+  useEffect(() => {
+    setMode('projectionPaint')
+  }, [setMode])
 
   useEffect(() => {
     let alive = true
@@ -343,6 +335,7 @@ function ProjectionWindow(): ReactElement {
       setInitialAssetsReady(false)
       setProjectionCreatedPath(null)
       resetWorkspace()
+      setMode('projectionPaint')
     })
 
     return () => {
@@ -350,7 +343,7 @@ function ProjectionWindow(): ReactElement {
       removeProjectionViewStateListener()
       removeResetListener()
     }
-  }, [resetWorkspace, setModel, setTexture])
+  }, [resetWorkspace, setMode, setModel, setTexture])
 
   useEffect(() => {
     if (!initialAssetsReady || !model || autoCapturedRef.current) {
@@ -434,6 +427,25 @@ function ProjectionWindow(): ReactElement {
       <header className="projection-window-toolbar">
         <strong>Projection View</strong>
         <div className="projection-window-actions">
+          <button
+            type="button"
+            className={mode === 'projectionPaint' ? 'tool-button active' : 'tool-button'}
+            onClick={() => setMode(mode === 'projectionPaint' ? 'orbit' : 'projectionPaint')}
+            title="Projection Paint"
+          >
+            <Layers size={18} />
+            <span>Projection Paint</span>
+          </button>
+          <label className="projection-overlay-control">
+            <span>Overlay {Math.round(projectionOpacity * 100)}%</span>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              value={Math.round(projectionOpacity * 100)}
+              onChange={(event) => setProjectionOpacity(Number(event.currentTarget.value) / 100)}
+            />
+          </label>
           <button type="button" className="tool-button" onClick={handleReload} disabled={isBusy} title="Reload">
             <RefreshCw size={18} />
             <span>Reload</span>

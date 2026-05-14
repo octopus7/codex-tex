@@ -40,6 +40,8 @@ export interface TextureToolApi {
   getProjectionViewState: () => Promise<ViewportCameraState | null>
   onProjectionViewState: (callback: (viewState: ViewportCameraState | null) => void) => () => void
   onProjectionImageLoaded: (callback: (projectionImage: LoadedTexture) => void) => () => void
+  publishTextureUpdate: (texture: LoadedTexture) => void
+  onTextureUpdated: (callback: (texture: LoadedTexture) => void) => () => void
   resetWorkspace: () => Promise<boolean>
   onResetWorkspace: (callback: () => void) => () => void
   saveTexture: (dataUrl: string, suggestedName?: string) => Promise<string | null>

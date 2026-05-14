@@ -142,6 +142,13 @@ button {
   background: var(--accent-strong);
 }
 
+.tool-button.active {
+  border-color: #c7d9d4;
+  background: #ffffff;
+  color: var(--accent-strong);
+  box-shadow: 0 1px 4px rgba(41, 38, 33, 0.1);
+}
+
 .viewport-single {
   display: grid;
   min-width: 0;
@@ -204,6 +211,20 @@ button {
   flex: 0 0 auto;
   align-items: center;
   gap: 8px;
+}
+
+.projection-overlay-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 190px;
+  color: var(--text-subtle);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.projection-overlay-control input {
+  width: 108px;
 }
 
 .projection-window-stage {
