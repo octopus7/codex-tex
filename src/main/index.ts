@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain } from 'electron'
-import { join } from 'node:path'
 import { readFile, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 
 const imageMimeByExtension = new Map([
   ['.png', 'image/png'],
@@ -83,6 +83,27 @@ ipcMain.handle('asset:open-texture', async () => {
   const mime = imageMimeByExtension.get(extension) ?? 'application/octet-stream'
   const dataUrl = `data:${mime};base64,${buffer.toString('base64')}`
   const name = path.split(/[\\/]/).at(-1) ?? 'albedo.png'
+
+  return { name, path, dataUrl }
+})
+
+ipcMain.handle('asset:open-projection-image', async () => {
+  const result = await dialog.showOpenDialog({
+    title: 'Open Projection Image',
+    properties: ['openFile'],
+    filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }]
+  })
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return null
+  }
+
+  const path = result.filePaths[0]
+  const buffer = await readFile(path)
+  const extension = path.slice(path.lastIndexOf('.')).toLowerCase()
+  const mime = imageMimeByExtension.get(extension) ?? 'application/octet-stream'
+  const dataUrl = `data:${mime};base64,${buffer.toString('base64')}`
+  const name = path.split(/[\\/]/).at(-1) ?? 'projection.png'
 
   return { name, path, dataUrl }
 })

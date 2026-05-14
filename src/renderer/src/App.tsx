@@ -1,9 +1,10 @@
-import { useRef } from 'react'
+import { type ReactElement, useRef } from 'react'
 import {
   Brush,
   Download,
   Eraser,
   Image,
+  Layers,
   MousePointer2,
   Rotate3D,
   SlidersHorizontal,
@@ -15,27 +16,34 @@ import { useTextureToolStore, type ToolMode } from './store'
 const modeOptions: Array<{ mode: ToolMode; label: string; icon: typeof MousePointer2 }> = [
   { mode: 'orbit', label: 'Orbit', icon: Rotate3D },
   { mode: 'paint', label: 'Paint', icon: Brush },
+  { mode: 'projectionPaint', label: 'Projection', icon: Layers },
   { mode: 'erase', label: 'Erase', icon: Eraser }
 ]
 
-export function App(): JSX.Element {
+export function App(): ReactElement {
   const viewerRef = useRef<ModelViewerHandle>(null)
   const {
     model,
     texture,
+    projectionImage,
     mode,
     brushColor,
     brushSize,
-    brushOpacity,
+    brushStrength,
+    brushHardness,
+    projectionOpacity,
     textureResolution,
     lastUv,
     status,
     setModel,
     setTexture,
+    setProjectionImage,
     setMode,
     setBrushColor,
     setBrushSize,
-    setBrushOpacity,
+    setBrushStrength,
+    setBrushHardness,
+    setProjectionOpacity,
     setStatus
   } = useTextureToolStore()
 
@@ -57,6 +65,16 @@ export function App(): JSX.Element {
 
     setTexture(nextTexture)
     setStatus(`Loaded ${nextTexture.name}`)
+  }
+
+  async function handleOpenProjectionImage(): Promise<void> {
+    const nextProjectionImage = await window.textureTool.openProjectionImage()
+    if (!nextProjectionImage) {
+      return
+    }
+
+    setProjectionImage(nextProjectionImage)
+    setStatus(`Loaded projection image ${nextProjectionImage.name}`)
   }
 
   async function handleExport(): Promise<void> {
@@ -90,6 +108,15 @@ export function App(): JSX.Element {
               <Image size={18} />
               <span>Albedo</span>
             </button>
+            <button
+              type="button"
+              className="tool-button"
+              onClick={handleOpenProjectionImage}
+              title="Open projection image"
+            >
+              <Layers size={18} />
+              <span>Projection</span>
+            </button>
             <button type="button" className="tool-button primary" onClick={handleExport} title="Export painted PNG">
               <Download size={18} />
               <span>Export</span>
@@ -116,7 +143,7 @@ export function App(): JSX.Element {
                   type="button"
                   className={active ? 'active' : ''}
                   onClick={() => setMode(option.mode)}
-                  title={option.label}
+                  title={option.mode === 'projectionPaint' ? 'Projection Paint' : option.label}
                 >
                   <Icon size={17} />
                   <span>{option.label}</span>
@@ -154,13 +181,42 @@ export function App(): JSX.Element {
           </label>
 
           <label className="control-block">
-            <span>Opacity {Math.round(brushOpacity * 100)}%</span>
+            <span>Strength {Math.round(brushStrength * 100)}%</span>
             <input
               type="range"
               min="5"
               max="100"
-              value={Math.round(brushOpacity * 100)}
-              onChange={(event) => setBrushOpacity(Number(event.currentTarget.value) / 100)}
+              value={Math.round(brushStrength * 100)}
+              onChange={(event) => setBrushStrength(Number(event.currentTarget.value) / 100)}
+            />
+          </label>
+
+          <label className="control-block">
+            <span>Hardness {Math.round(brushHardness * 100)}%</span>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              value={Math.round(brushHardness * 100)}
+              onChange={(event) => setBrushHardness(Number(event.currentTarget.value) / 100)}
+            />
+          </label>
+        </section>
+
+        <section className="panel-section">
+          <div className="section-title">
+            <Layers size={16} />
+            <span>Projection</span>
+          </div>
+
+          <label className="control-block">
+            <span>Overlay {Math.round(projectionOpacity * 100)}%</span>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              value={Math.round(projectionOpacity * 100)}
+              onChange={(event) => setProjectionOpacity(Number(event.currentTarget.value) / 100)}
             />
           </label>
         </section>
@@ -178,6 +234,10 @@ export function App(): JSX.Element {
             <div>
               <dt>Texture</dt>
               <dd>{texture?.name ?? 'Generated canvas'}</dd>
+            </div>
+            <div>
+              <dt>Projection</dt>
+              <dd>{projectionImage?.name ?? 'None'}</dd>
             </div>
             <div>
               <dt>Resolution</dt>

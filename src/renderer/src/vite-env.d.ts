@@ -15,6 +15,7 @@ export interface LoadedTexture {
 export interface TextureToolApi {
   openObj: () => Promise<LoadedObj | null>
   openTexture: () => Promise<LoadedTexture | null>
+  openProjectionImage: () => Promise<LoadedTexture | null>
   saveTexture: (dataUrl: string, suggestedName?: string) => Promise<string | null>
 }
 

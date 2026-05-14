@@ -1,24 +1,30 @@
 import { create } from 'zustand'
 import type { LoadedObj, LoadedTexture } from './vite-env'
 
-export type ToolMode = 'orbit' | 'paint' | 'erase'
+export type ToolMode = 'orbit' | 'paint' | 'projectionPaint' | 'erase'
 
 interface TextureToolState {
   model: LoadedObj | null
   texture: LoadedTexture | null
+  projectionImage: LoadedTexture | null
   mode: ToolMode
   brushColor: string
   brushSize: number
-  brushOpacity: number
+  brushStrength: number
+  brushHardness: number
+  projectionOpacity: number
   textureResolution: string
   lastUv: string
   status: string
   setModel: (model: LoadedObj | null) => void
   setTexture: (texture: LoadedTexture | null) => void
+  setProjectionImage: (projectionImage: LoadedTexture | null) => void
   setMode: (mode: ToolMode) => void
   setBrushColor: (brushColor: string) => void
   setBrushSize: (brushSize: number) => void
-  setBrushOpacity: (brushOpacity: number) => void
+  setBrushStrength: (brushStrength: number) => void
+  setBrushHardness: (brushHardness: number) => void
+  setProjectionOpacity: (projectionOpacity: number) => void
   setTextureResolution: (textureResolution: string) => void
   setLastUv: (lastUv: string) => void
   setStatus: (status: string) => void
@@ -27,19 +33,25 @@ interface TextureToolState {
 export const useTextureToolStore = create<TextureToolState>((set) => ({
   model: null,
   texture: null,
+  projectionImage: null,
   mode: 'orbit',
   brushColor: '#ef4e36',
   brushSize: 42,
-  brushOpacity: 0.85,
+  brushStrength: 0.85,
+  brushHardness: 0.65,
+  projectionOpacity: 0.45,
   textureResolution: '1024 x 1024',
   lastUv: '-',
-  status: 'Load an OBJ with UVs and an albedo texture.',
+  status: 'Load an OBJ, albedo texture, and optional projection image.',
   setModel: (model) => set({ model }),
   setTexture: (texture) => set({ texture }),
+  setProjectionImage: (projectionImage) => set({ projectionImage }),
   setMode: (mode) => set({ mode }),
   setBrushColor: (brushColor) => set({ brushColor }),
   setBrushSize: (brushSize) => set({ brushSize }),
-  setBrushOpacity: (brushOpacity) => set({ brushOpacity }),
+  setBrushStrength: (brushStrength) => set({ brushStrength }),
+  setBrushHardness: (brushHardness) => set({ brushHardness }),
+  setProjectionOpacity: (projectionOpacity) => set({ projectionOpacity }),
   setTextureResolution: (textureResolution) => set({ textureResolution }),
   setLastUv: (lastUv) => set({ lastUv }),
   setStatus: (status) => set({ status })

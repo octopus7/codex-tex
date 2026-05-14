@@ -127,7 +127,10 @@ button {
 
 .viewport-wrap {
   position: relative;
+  min-width: 0;
   min-height: 0;
+  overflow: hidden;
+  background: #e9e6dc;
 }
 
 .viewport-wrap canvas {
@@ -135,10 +138,64 @@ button {
   outline: none;
 }
 
+.viewport-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1px;
+  min-width: 0;
+  min-height: 0;
+  background: var(--line);
+}
+
+.projection-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+  mix-blend-mode: normal;
+}
+
+.viewport-label {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 28px);
+  padding: 7px 9px;
+  border: 1px solid rgba(87, 82, 73, 0.18);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: 0 8px 22px rgba(57, 53, 45, 0.1);
+  pointer-events: none;
+}
+
+.viewport-label strong {
+  color: #262821;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.viewport-label span {
+  overflow: hidden;
+  color: var(--text-subtle);
+  font-size: 11px;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .viewport-empty {
   position: absolute;
   left: 24px;
   bottom: 24px;
+  z-index: 3;
   display: grid;
   gap: 3px;
   width: 230px;
@@ -198,6 +255,12 @@ button {
   border-color: transparent;
   background: transparent;
   font-size: 12px;
+}
+
+.segmented-control button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .segmented-control button.active {
@@ -271,5 +334,9 @@ input[type='range'] {
 
   .tool-button {
     min-width: 72px;
+  }
+
+  .viewport-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

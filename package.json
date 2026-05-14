@@ -5,11 +5,10 @@
   "main": "./out/main/index.js",
   "author": "",
   "license": "MIT",
-  "type": "module",
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "set ELECTRON_RUN_AS_NODE=& electron-vite dev",
     "build": "tsc --noEmit && electron-vite build",
-    "preview": "electron-vite preview",
+    "preview": "set ELECTRON_RUN_AS_NODE=& electron-vite preview",
     "dist": "npm run build && electron-builder"
   },
   "dependencies": {
@@ -25,12 +24,12 @@
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
-    "@vitejs/plugin-react": "latest",
+    "@vitejs/plugin-react": "^5.1.1",
     "electron": "latest",
     "electron-builder": "latest",
-    "electron-vite": "latest",
+    "electron-vite": "^5.0.0",
     "typescript": "latest",
-    "vite": "latest"
+    "vite": "^7.3.3"
   },
   "build": {
     "appId": "com.codex.textureprojection",
