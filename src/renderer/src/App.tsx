@@ -1,6 +1,7 @@
 import { type ReactElement, useEffect, useRef, useState } from 'react'
 import {
   Brush,
+  Check,
   Download,
   Eraser,
   Image,
@@ -288,11 +289,17 @@ function ProjectionWindow(): ReactElement {
   const model = useTextureToolStore((state) => state.model)
   const texture = useTextureToolStore((state) => state.texture)
   const mode = useTextureToolStore((state) => state.mode)
+  const brushSize = useTextureToolStore((state) => state.brushSize)
+  const brushStrength = useTextureToolStore((state) => state.brushStrength)
+  const brushHardness = useTextureToolStore((state) => state.brushHardness)
   const projectionOpacity = useTextureToolStore((state) => state.projectionOpacity)
   const setModel = useTextureToolStore((state) => state.setModel)
   const setTexture = useTextureToolStore((state) => state.setTexture)
   const setProjectionImage = useTextureToolStore((state) => state.setProjectionImage)
   const setMode = useTextureToolStore((state) => state.setMode)
+  const setBrushSize = useTextureToolStore((state) => state.setBrushSize)
+  const setBrushStrength = useTextureToolStore((state) => state.setBrushStrength)
+  const setBrushHardness = useTextureToolStore((state) => state.setBrushHardness)
   const setProjectionOpacity = useTextureToolStore((state) => state.setProjectionOpacity)
   const resetWorkspace = useTextureToolStore((state) => state.resetWorkspace)
 
@@ -415,8 +422,23 @@ function ProjectionWindow(): ReactElement {
         await resolveProjectionCreatedPath()
       )
       setProjectionImage(capturedProjectionImage)
+      viewerRef.current?.resetProjectionMask()
     } catch (error) {
       console.error(error)
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  async function handleBake(): Promise<void> {
+    if (isBusy) {
+      return
+    }
+
+    setIsBusy(true)
+    try {
+      await waitForRenderFrames(1)
+      viewerRef.current?.bakeProjectionMask()
     } finally {
       setIsBusy(false)
     }
@@ -430,11 +452,22 @@ function ProjectionWindow(): ReactElement {
           <button
             type="button"
             className={mode === 'projectionPaint' ? 'tool-button active' : 'tool-button'}
-            onClick={() => setMode(mode === 'projectionPaint' ? 'orbit' : 'projectionPaint')}
-            title="Projection Paint"
+            onClick={() => setMode('projectionPaint')}
+            title="Paint projection mask"
+            disabled={isBusy}
           >
             <Layers size={18} />
-            <span>Projection Paint</span>
+            <span>Mask</span>
+          </button>
+          <button
+            type="button"
+            className={mode === 'erase' ? 'tool-button active' : 'tool-button'}
+            onClick={() => setMode('erase')}
+            title="Erase projection mask"
+            disabled={isBusy}
+          >
+            <Eraser size={18} />
+            <span>Erase</span>
           </button>
           <label className="projection-overlay-control">
             <span>Overlay {Math.round(projectionOpacity * 100)}%</span>
@@ -446,9 +479,43 @@ function ProjectionWindow(): ReactElement {
               onChange={(event) => setProjectionOpacity(Number(event.currentTarget.value) / 100)}
             />
           </label>
+          <label className="projection-compact-control">
+            <span>Size {brushSize}px</span>
+            <input
+              type="range"
+              min="4"
+              max="180"
+              value={brushSize}
+              onChange={(event) => setBrushSize(Number(event.currentTarget.value))}
+            />
+          </label>
+          <label className="projection-compact-control">
+            <span>Strength {Math.round(brushStrength * 100)}%</span>
+            <input
+              type="range"
+              min="5"
+              max="100"
+              value={Math.round(brushStrength * 100)}
+              onChange={(event) => setBrushStrength(Number(event.currentTarget.value) / 100)}
+            />
+          </label>
+          <label className="projection-compact-control">
+            <span>Hardness {Math.round(brushHardness * 100)}%</span>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              value={Math.round(brushHardness * 100)}
+              onChange={(event) => setBrushHardness(Number(event.currentTarget.value) / 100)}
+            />
+          </label>
           <button type="button" className="tool-button" onClick={handleReload} disabled={isBusy} title="Reload">
             <RefreshCw size={18} />
             <span>Reload</span>
+          </button>
+          <button type="button" className="tool-button primary" onClick={handleBake} disabled={isBusy} title="Bake">
+            <Check size={18} />
+            <span>Bake</span>
           </button>
         </div>
       </header>

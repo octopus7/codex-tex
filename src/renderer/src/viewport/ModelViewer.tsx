@@ -1,5 +1,6 @@
 import {
   type ReactElement,
+  type PointerEvent as ReactPointerEvent,
   forwardRef,
   Suspense,
   useEffect,
@@ -27,6 +28,8 @@ export interface ModelViewerHandle {
   getTextureDataUrl: () => string | null
   getProjectionViewDataUrl: () => string | null
   getViewportState: () => ViewportCameraState | null
+  bakeProjectionMask: () => boolean
+  resetProjectionMask: () => void
 }
 
 interface ModelViewerProps {
@@ -39,6 +42,27 @@ interface RgbaColor {
   g: number
   b: number
   a: number
+}
+
+interface ProjectionImagePoint {
+  x: number
+  y: number
+  projectionRect: DOMRectLike
+  coveredRect: DOMRectLike
+}
+
+interface DOMRectLike {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+interface AlphaBounds {
+  left: number
+  top: number
+  right: number
+  bottom: number
 }
 
 const DEFAULT_TEXTURE_SIZE = 1024
@@ -71,9 +95,14 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
   const textureRef = useRef<THREE.CanvasTexture | null>(null)
   const workViewportRef = useRef<HTMLDivElement | null>(null)
   const projectionImageRef = useRef<HTMLImageElement | null>(null)
+  const projectionMaskCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const projectionMaskContextRef = useRef<CanvasRenderingContext2D | null>(null)
+  const projectionPreviewCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const projectionSamplerRef = useRef<HTMLCanvasElement | null>(null)
   const projectionContextRef = useRef<CanvasRenderingContext2D | null>(null)
   const projectionImageDataRef = useRef<ImageData | null>(null)
+  const projectionCameraRef = useRef<THREE.Camera | null>(null)
+  const projectionObjectRef = useRef<THREE.Object3D | null>(null)
   const viewportCameraStateRef = useRef<ViewportCameraState | null>(initialViewState)
   const raycasterRef = useRef(new THREE.Raycaster())
   const drawingRef = useRef(false)
@@ -116,7 +145,9 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
   useImperativeHandle(ref, () => ({
     getTextureDataUrl: () => textureCanvasRef.current?.toDataURL('image/png') ?? null,
     getProjectionViewDataUrl: () => captureProjectionView(),
-    getViewportState: () => cloneViewportCameraState(viewportCameraStateRef.current)
+    getViewportState: () => cloneViewportCameraState(viewportCameraStateRef.current),
+    bakeProjectionMask: () => bakeProjectionMask(),
+    resetProjectionMask: () => resetProjectionMask()
   }))
 
   useEffect(() => {
@@ -188,8 +219,11 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
 
     if (!projectionImage?.dataUrl) {
       projectionImageRef.current = null
+      projectionMaskContextRef.current = null
+      projectionMaskCanvasRef.current = null
       projectionContextRef.current = null
       projectionImageDataRef.current = null
+      clearProjectionPreview()
       return
     }
 
@@ -211,6 +245,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
       projectionImageRef.current = image
       projectionContextRef.current = context
       projectionImageDataRef.current = context?.getImageData(0, 0, sampler.width, sampler.height) ?? null
+      resetProjectionMask()
     }
     image.src = projectionImage.dataUrl
 
@@ -221,21 +256,14 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
 
   useEffect(() => {
     function finishStroke(): void {
-      const shouldPublishTexture =
-        drawingRef.current && strokeChangedRef.current && projectionWindow && mode === 'projectionPaint'
-
       drawingRef.current = false
       strokeChangedRef.current = false
       flushPendingLastUv()
-
-      if (shouldPublishTexture) {
-        publishEditedTexture()
-      }
     }
 
     window.addEventListener('pointerup', finishStroke)
     return () => window.removeEventListener('pointerup', finishStroke)
-  }, [mode, projectionWindow, setLastUv, texture])
+  }, [setLastUv])
 
   function updateViewportCameraState(nextState: ViewportCameraState): void {
     viewportCameraStateRef.current = cloneViewportCameraState(nextState)
@@ -558,6 +586,233 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
     })
   }
 
+  function resetProjectionMask(): void {
+    const image = projectionImageRef.current
+    if (!image) {
+      clearProjectionPreview()
+      return
+    }
+
+    const maskCanvas = projectionMaskCanvasRef.current ?? document.createElement('canvas')
+    maskCanvas.width = image.naturalWidth
+    maskCanvas.height = image.naturalHeight
+    projectionMaskCanvasRef.current = maskCanvas
+    projectionMaskContextRef.current = maskCanvas.getContext('2d', { willReadFrequently: true })
+    projectionMaskContextRef.current?.clearRect(0, 0, maskCanvas.width, maskCanvas.height)
+
+    const previewCanvas = projectionPreviewCanvasRef.current
+    if (previewCanvas) {
+      previewCanvas.width = image.naturalWidth
+      previewCanvas.height = image.naturalHeight
+    }
+
+    renderProjectionMaskPreview()
+  }
+
+  function clearProjectionPreview(): void {
+    const previewCanvas = projectionPreviewCanvasRef.current
+    const previewContext = previewCanvas?.getContext('2d')
+    if (!previewCanvas || !previewContext) {
+      return
+    }
+
+    previewContext.clearRect(0, 0, previewCanvas.width, previewCanvas.height)
+  }
+
+  function handleProjectionMaskPointerDown(event: ReactPointerEvent<HTMLCanvasElement>): void {
+    if (!canEditProjectionMask()) {
+      return
+    }
+
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    drawingRef.current = true
+    strokeChangedRef.current = false
+    paintProjectionMaskFromPointer(event)
+  }
+
+  function handleProjectionMaskPointerMove(event: ReactPointerEvent<HTMLCanvasElement>): void {
+    if (!drawingRef.current || !canEditProjectionMask()) {
+      return
+    }
+
+    event.preventDefault()
+    paintProjectionMaskFromPointer(event)
+  }
+
+  function canEditProjectionMask(): boolean {
+    return projectionWindow && (mode === 'projectionPaint' || mode === 'erase') && Boolean(projectionImageRef.current)
+  }
+
+  function paintProjectionMaskFromPointer(event: ReactPointerEvent<HTMLCanvasElement>): void {
+    const imagePoint = getProjectionImagePointFromClient(event.clientX, event.clientY)
+    const context = projectionMaskContextRef.current
+    const image = projectionImageRef.current
+    if (!imagePoint || !context || !image) {
+      return
+    }
+
+    const radius = Math.max(0.5, (brushSize / 2) * (image.naturalWidth / imagePoint.coveredRect.width))
+    const alpha = clamp(brushStrength, 0, 1)
+
+    context.save()
+    context.globalCompositeOperation = mode === 'erase' ? 'destination-out' : 'source-over'
+    context.fillStyle = createBrushFill(
+      context,
+      imagePoint.x,
+      imagePoint.y,
+      radius,
+      { r: 255, g: 255, b: 255, a: 1 },
+      alpha,
+      brushHardness
+    )
+    context.beginPath()
+    context.arc(imagePoint.x, imagePoint.y, radius, 0, Math.PI * 2)
+    context.fill()
+    context.restore()
+
+    strokeChangedRef.current = true
+    renderProjectionMaskPreview()
+  }
+
+  function renderProjectionMaskPreview(): void {
+    const image = projectionImageRef.current
+    const maskCanvas = projectionMaskCanvasRef.current
+    const previewCanvas = projectionPreviewCanvasRef.current
+    if (!image || !maskCanvas || !previewCanvas) {
+      return
+    }
+
+    if (previewCanvas.width !== image.naturalWidth || previewCanvas.height !== image.naturalHeight) {
+      previewCanvas.width = image.naturalWidth
+      previewCanvas.height = image.naturalHeight
+    }
+
+    const context = previewCanvas.getContext('2d')
+    if (!context) {
+      return
+    }
+
+    context.clearRect(0, 0, previewCanvas.width, previewCanvas.height)
+    context.globalCompositeOperation = 'source-over'
+    context.drawImage(image, 0, 0, previewCanvas.width, previewCanvas.height)
+    context.globalCompositeOperation = 'destination-in'
+    context.drawImage(maskCanvas, 0, 0, previewCanvas.width, previewCanvas.height)
+    context.globalCompositeOperation = 'source-over'
+  }
+
+  function bakeProjectionMask(): boolean {
+    const viewport = workViewportRef.current
+    const image = projectionImageRef.current
+    const imageData = projectionImageDataRef.current
+    const maskCanvas = projectionMaskCanvasRef.current
+    const maskContext = projectionMaskContextRef.current
+    const camera = projectionCameraRef.current
+    const object = projectionObjectRef.current
+    const textureCanvas = textureCanvasRef.current
+
+    if (!viewport || !image || !imageData || !maskCanvas || !maskContext || !camera || !object || !textureCanvas) {
+      reportStatus('Reload a projection image before baking.')
+      return false
+    }
+
+    const maskData = maskContext.getImageData(0, 0, maskCanvas.width, maskCanvas.height)
+    const bounds = getAlphaBounds(maskData.data, maskCanvas.width, maskCanvas.height)
+    if (!bounds) {
+      reportStatus('Paint a projection mask before baking.')
+      return false
+    }
+
+    const rect = viewport.getBoundingClientRect()
+    const projectionRect = getProjectionOverlayRect(rect.width, rect.height)
+    const coveredRect = getCoveredImageRect(image.naturalWidth, image.naturalHeight, projectionRect.width, projectionRect.height)
+    const step = getProjectionBakeSampleStep(maskCanvas.width, maskCanvas.height)
+    const stampRadius = getProjectionBakeStampRadius(textureCanvas.width, textureCanvas.height, maskCanvas.width, step)
+    let hits = 0
+
+    for (let y = bounds.top; y <= bounds.bottom; y += step) {
+      for (let x = bounds.left; x <= bounds.right; x += step) {
+        const pixelOffset = (y * maskData.width + x) * 4
+        const maskAlpha = maskData.data[pixelOffset + 3] / 255
+        if (maskAlpha <= 0.01) {
+          continue
+        }
+
+        const imageOffset = (y * imageData.width + x) * 4
+        const projectedColor = {
+          r: imageData.data[imageOffset],
+          g: imageData.data[imageOffset + 1],
+          b: imageData.data[imageOffset + 2],
+          a: imageData.data[imageOffset + 3] / 255
+        }
+
+        if (projectedColor.a <= 0) {
+          continue
+        }
+
+        const clientX = rect.left + projectionRect.x + coveredRect.x + ((x + 0.5) / maskCanvas.width) * coveredRect.width
+        const clientY = rect.top + projectionRect.y + coveredRect.y + ((y + 0.5) / maskCanvas.height) * coveredRect.height
+        const uv = raycastUvFromClient(clientX, clientY, rect, camera, object)
+        if (!uv) {
+          continue
+        }
+
+        drawDabAtUv({
+          uv,
+          color: projectedColor,
+          strength: maskAlpha * projectedColor.a,
+          radius: stampRadius,
+          hardness: 0.2
+        })
+        hits += 1
+      }
+    }
+
+    if (hits === 0) {
+      reportStatus('Projection bake did not hit visible UVs under the mask.')
+      return false
+    }
+
+    uploadEditableTexture()
+    publishEditedTexture()
+    resetProjectionMask()
+    reportStatus(`Baked projection mask with ${hits} samples.`)
+
+    return true
+  }
+
+  function getProjectionImagePointFromClient(clientX: number, clientY: number): ProjectionImagePoint | null {
+    const viewport = workViewportRef.current
+    const image = projectionImageRef.current
+    if (!viewport || !image) {
+      return null
+    }
+
+    const rect = viewport.getBoundingClientRect()
+    const projectionRect = getProjectionOverlayRect(rect.width, rect.height)
+    const coveredRect = getCoveredImageRect(image.naturalWidth, image.naturalHeight, projectionRect.width, projectionRect.height)
+    const localElementX = clientX - rect.left - projectionRect.x
+    const localElementY = clientY - rect.top - projectionRect.y
+    const localImageX = localElementX - coveredRect.x
+    const localImageY = localElementY - coveredRect.y
+
+    if (
+      localImageX < 0 ||
+      localImageY < 0 ||
+      localImageX > coveredRect.width ||
+      localImageY > coveredRect.height
+    ) {
+      return null
+    }
+
+    return {
+      x: clamp((localImageX / coveredRect.width) * image.naturalWidth, 0, image.naturalWidth - 1),
+      y: clamp((localImageY / coveredRect.height) * image.naturalHeight, 0, image.naturalHeight - 1),
+      projectionRect,
+      coveredRect
+    }
+  }
+
   function reportLastUv(uv: THREE.Vector2): void {
     pendingLastUvRef.current = `${uv.x.toFixed(3)}, ${uv.y.toFixed(3)}`
 
@@ -623,7 +878,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
   }
 
   const paintableFromMainViewport = mode === 'paint' || mode === 'erase'
-  const projectionPaintEnabled = mode === 'projectionPaint'
+  const projectionMaskEditable = projectionWindow && (mode === 'projectionPaint' || mode === 'erase') && Boolean(projectionImage)
 
   if (projectionWindow) {
     return (
@@ -638,33 +893,30 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
             fitToBounds={false}
             initialViewState={initialViewState}
             onViewStateChange={updateViewportCameraState}
-            onPointerDown={
-              projectionPaintEnabled
-                ? (event) => {
-                    drawingRef.current = true
-                    paintFromEvent(event)
-                  }
-                : undefined
-            }
-            onPointerMove={
-              projectionPaintEnabled
-                ? (event) => {
-                    if (drawingRef.current) {
-                      paintFromEvent(event)
-                    }
-                  }
-                : undefined
-            }
-            onMissingUv={() => setStatus('The selected mesh has no UV at the pointer hit.')}
+            onCameraReady={(camera) => {
+              projectionCameraRef.current = camera
+            }}
+            onObjectReady={(object) => {
+              projectionObjectRef.current = object
+            }}
           />
           {projectionImage && (
-            <img
-              className="projection-overlay"
-              src={projectionImage.dataUrl}
-              alt=""
-              style={{ opacity: projectionOpacity }}
-              draggable={false}
-            />
+            <>
+              <img
+                className="projection-overlay projection-guide"
+                src={projectionImage.dataUrl}
+                alt=""
+                style={{ opacity: projectionOpacity }}
+                draggable={false}
+              />
+              <canvas
+                ref={projectionPreviewCanvasRef}
+                className={projectionMaskEditable ? 'projection-mask-preview active' : 'projection-mask-preview'}
+                onPointerDown={handleProjectionMaskPointerDown}
+                onPointerMove={handleProjectionMaskPointerMove}
+                onContextMenu={(event) => event.preventDefault()}
+              />
+            </>
           )}
           {!model && <EmptyOverlay title="No OBJ loaded" body="Load an OBJ in the main window first." />}
         </div>
@@ -719,6 +971,8 @@ interface ViewportSceneProps {
   onPointerDown?: (event: ThreeEvent<PointerEvent>) => void
   onPointerMove?: (event: ThreeEvent<PointerEvent>) => void
   onMissingUv?: () => void
+  onCameraReady?: (camera: THREE.Camera) => void
+  onObjectReady?: (object: THREE.Object3D | null) => void
 }
 
 function ViewportScene({
@@ -731,7 +985,9 @@ function ViewportScene({
   onViewStateChange,
   onPointerDown,
   onPointerMove,
-  onMissingUv
+  onMissingUv,
+  onCameraReady,
+  onObjectReady
 }: ViewportSceneProps): ReactElement {
   return (
     <Canvas
@@ -744,6 +1000,7 @@ function ViewportScene({
         controlsEnabled={controlsEnabled}
         initialViewState={initialViewState}
         onViewStateChange={onViewStateChange}
+        onCameraReady={onCameraReady}
       />
       <Suspense fallback={null}>
         <Environment preset="studio" />
@@ -757,6 +1014,7 @@ function ViewportScene({
                 onPointerDown={onPointerDown}
                 onPointerMove={onPointerMove}
                 onMissingUv={onMissingUv}
+                onObjectReady={onObjectReady}
               />
             </Center>
           </Bounds>
@@ -769,6 +1027,7 @@ function ViewportScene({
               onPointerDown={onPointerDown}
               onPointerMove={onPointerMove}
               onMissingUv={onMissingUv}
+              onObjectReady={onObjectReady}
             />
           </Center>
         ) : (
@@ -794,17 +1053,23 @@ function ViewportScene({
 function CameraStateController({
   controlsEnabled,
   initialViewState,
-  onViewStateChange
+  onViewStateChange,
+  onCameraReady
 }: {
   controlsEnabled: boolean
   initialViewState: ViewportCameraState | null
   onViewStateChange?: (state: ViewportCameraState) => void
+  onCameraReady?: (camera: THREE.Camera) => void
 }): ReactElement | null {
   const { camera } = useThree()
   const controlsRef = useRef<any>(null)
   const fallbackTargetRef = useRef(new THREE.Vector3(0, 0, 0))
   const appliedStateRef = useRef<string | null>(null)
   const lastReportAtRef = useRef(0)
+
+  useEffect(() => {
+    onCameraReady?.(camera)
+  }, [camera, onCameraReady])
 
   useLayoutEffect(() => {
     if (!initialViewState) {
@@ -869,6 +1134,7 @@ interface LoadedObjProps {
   onPointerDown?: (event: ThreeEvent<PointerEvent>) => void
   onPointerMove?: (event: ThreeEvent<PointerEvent>) => void
   onMissingUv?: () => void
+  onObjectReady?: (object: THREE.Object3D | null) => void
 }
 
 function LoadedObj({
@@ -877,7 +1143,8 @@ function LoadedObj({
   textureRevision,
   onPointerDown,
   onPointerMove,
-  onMissingUv
+  onMissingUv,
+  onObjectReady
 }: LoadedObjProps): ReactElement {
   const object = useMemo(() => {
     const parsed = new OBJLoader().parse(objContent)
@@ -919,6 +1186,14 @@ function LoadedObj({
       }
     })
   }, [object, texture, textureRevision])
+
+  useEffect(() => {
+    onObjectReady?.(object)
+
+    return () => {
+      onObjectReady?.(null)
+    }
+  }, [object, onObjectReady])
 
   useEffect(() => {
     return () => {
@@ -1047,6 +1322,58 @@ function getProjectionSampleStep(radius: number): number {
   }
 
   return 8
+}
+
+function getProjectionBakeSampleStep(width: number, height: number): number {
+  const size = Math.max(width, height)
+
+  if (size >= 2048) {
+    return 4
+  }
+
+  if (size >= 1024) {
+    return 3
+  }
+
+  return 2
+}
+
+function getProjectionBakeStampRadius(
+  textureWidth: number,
+  textureHeight: number,
+  projectionWidth: number,
+  sampleStep: number
+): number {
+  const textureSize = Math.max(textureWidth, textureHeight)
+
+  return clamp((sampleStep / projectionWidth) * textureSize * 2, 1.5, 8)
+}
+
+function getAlphaBounds(data: Uint8ClampedArray, width: number, height: number): AlphaBounds | null {
+  let left = width
+  let top = height
+  let right = -1
+  let bottom = -1
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const alpha = data[(y * width + x) * 4 + 3]
+      if (alpha === 0) {
+        continue
+      }
+
+      left = Math.min(left, x)
+      top = Math.min(top, y)
+      right = Math.max(right, x)
+      bottom = Math.max(bottom, y)
+    }
+  }
+
+  if (right < 0 || bottom < 0) {
+    return null
+  }
+
+  return { left, top, right, bottom }
 }
 
 function getCoveredImageRect(
