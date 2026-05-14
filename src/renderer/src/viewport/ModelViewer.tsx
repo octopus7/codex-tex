@@ -75,6 +75,12 @@ interface AlphaBounds {
   bottom: number
 }
 
+interface ProjectionUvBuffer {
+  width: number
+  height: number
+  data: Uint8Array
+}
+
 const DEFAULT_TEXTURE_SIZE = 1024
 const PROJECTION_CAPTURE_SIZE = 2048
 
@@ -113,6 +119,9 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
   const projectionImageDataRef = useRef<ImageData | null>(null)
   const projectionCameraRef = useRef<THREE.Camera | null>(null)
   const projectionObjectRef = useRef<THREE.Object3D | null>(null)
+  const projectionRendererRef = useRef<THREE.WebGLRenderer | null>(null)
+  const projectionSceneRef = useRef<THREE.Scene | null>(null)
+  const projectionUvBufferRef = useRef<ProjectionUvBuffer | null>(null)
   const viewportCameraStateRef = useRef<ViewportCameraState | null>(initialViewState)
   const raycasterRef = useRef(new THREE.Raycaster())
   const drawingRef = useRef(false)
@@ -233,6 +242,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
       projectionMaskCanvasRef.current = null
       projectionContextRef.current = null
       projectionImageDataRef.current = null
+      projectionUvBufferRef.current = null
       clearProjectionPreview()
       return
     }
@@ -711,18 +721,137 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
     context.globalCompositeOperation = 'source-over'
   }
 
+  function getProjectionUvBuffer(width: number, height: number): ProjectionUvBuffer | null {
+    const current = projectionUvBufferRef.current
+    if (current && current.width === width && current.height === height) {
+      return current
+    }
+
+    const nextBuffer = renderProjectionUvBuffer(width, height)
+    projectionUvBufferRef.current = nextBuffer
+
+    return nextBuffer
+  }
+
+  function renderProjectionUvBuffer(width: number, height: number): ProjectionUvBuffer | null {
+    const renderer = projectionRendererRef.current
+    const scene = projectionSceneRef.current
+    const camera = projectionCameraRef.current
+    const targetObject = projectionObjectRef.current
+    if (!renderer || !scene || !camera || !targetObject) {
+      return null
+    }
+
+    const uvMaterial = createUvEncodeMaterial()
+    const renderTarget = new THREE.WebGLRenderTarget(width, height, {
+      depthBuffer: true,
+      stencilBuffer: false,
+      format: THREE.RGBAFormat,
+      type: THREE.UnsignedByteType
+    })
+    const pixels = new Uint8Array(width * height * 4)
+    const objectStates: Array<{
+      object: THREE.Object3D
+      visible: boolean
+      material?: THREE.Material | THREE.Material[]
+    }> = []
+    const previousTarget = renderer.getRenderTarget()
+    const previousClearColor = new THREE.Color()
+    renderer.getClearColor(previousClearColor)
+    const previousClearAlpha = renderer.getClearAlpha()
+    const previousAutoClear = renderer.autoClear
+    const previousBackground = scene.background
+
+    scene.traverse((object) => {
+      const insideTarget = isDescendantOf(object, targetObject)
+      const targetInsideObject = isDescendantOf(targetObject, object)
+      if (!insideTarget && !targetInsideObject) {
+        objectStates.push({ object, visible: object.visible })
+        object.visible = false
+        return
+      }
+
+      if (targetInsideObject && object !== targetObject) {
+        objectStates.push({ object, visible: object.visible })
+        object.visible = true
+        return
+      }
+
+      if (!(object instanceof THREE.Mesh)) {
+        return
+      }
+
+      objectStates.push({ object, visible: object.visible, material: object.material })
+      if (object.geometry.getAttribute('uv')) {
+        object.visible = true
+        object.material = uvMaterial
+      } else {
+        object.visible = false
+      }
+    })
+
+    try {
+      scene.background = null
+      renderer.autoClear = true
+      renderer.setClearColor(0x000000, 0)
+      renderer.setRenderTarget(renderTarget)
+      renderer.clear(true, true, true)
+      renderer.render(scene, camera)
+      renderer.readRenderTargetPixels(renderTarget, 0, 0, width, height, pixels)
+    } finally {
+      objectStates.forEach((state) => {
+        state.object.visible = state.visible
+        if (state.material && state.object instanceof THREE.Mesh) {
+          state.object.material = state.material
+        }
+      })
+      scene.background = previousBackground
+      renderer.setRenderTarget(previousTarget)
+      renderer.setClearColor(previousClearColor, previousClearAlpha)
+      renderer.autoClear = previousAutoClear
+      uvMaterial.dispose()
+      renderTarget.dispose()
+    }
+
+    return { width, height, data: pixels }
+  }
+
+  function sampleProjectionUvBuffer(buffer: ProjectionUvBuffer, x: number, y: number): THREE.Vector2 | null {
+    const sourceX = clamp(Math.floor(x), 0, buffer.width - 1)
+    const sourceY = clamp(Math.floor(y), 0, buffer.height - 1)
+    const flippedY = buffer.height - 1 - sourceY
+    const offset = (flippedY * buffer.width + sourceX) * 4
+    const r = buffer.data[offset]
+    const g = buffer.data[offset + 1]
+    const b = buffer.data[offset + 2]
+    const a = buffer.data[offset + 3]
+
+    if (r === 0 && g === 0 && b === 0 && a === 0) {
+      return null
+    }
+
+    const u = ((r * 256 + g) / 65535)
+    const v = ((b * 256 + a) / 65535)
+
+    return new THREE.Vector2(u, v)
+  }
+
   async function bakeProjectionMask(onProgress?: (progress: ProjectionBakeProgress) => void): Promise<boolean> {
     const viewport = workViewportRef.current
     const image = projectionImageRef.current
     const imageData = projectionImageDataRef.current
     const maskCanvas = projectionMaskCanvasRef.current
     const maskContext = projectionMaskContextRef.current
-    const camera = projectionCameraRef.current
-    const object = projectionObjectRef.current
     const textureCanvas = textureCanvasRef.current
 
-    if (!viewport || !image || !imageData || !maskCanvas || !maskContext || !camera || !object || !textureCanvas) {
+    if (!viewport || !image || !imageData || !maskCanvas || !maskContext || !textureCanvas) {
       reportStatus('Reload a projection image before baking.')
+      return false
+    }
+
+    const uvBuffer = getProjectionUvBuffer(maskCanvas.width, maskCanvas.height)
+    if (!uvBuffer) {
+      reportStatus('Projection UV buffer could not be prepared.')
       return false
     }
 
@@ -733,9 +862,6 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
       return false
     }
 
-    const rect = viewport.getBoundingClientRect()
-    const projectionRect = getProjectionOverlayRect(rect.width, rect.height)
-    const coveredRect = getCoveredImageRect(image.naturalWidth, image.naturalHeight, projectionRect.width, projectionRect.height)
     const step = getProjectionBakeSampleStep(maskCanvas.width, maskCanvas.height)
     const stampRadius = getProjectionBakeStampRadius(textureCanvas.width, textureCanvas.height, maskCanvas.width, step)
     const columnCount = Math.floor((bounds.right - bounds.left) / step) + 1
@@ -792,9 +918,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
           continue
         }
 
-        const clientX = rect.left + projectionRect.x + coveredRect.x + ((x + 0.5) / maskCanvas.width) * coveredRect.width
-        const clientY = rect.top + projectionRect.y + coveredRect.y + ((y + 0.5) / maskCanvas.height) * coveredRect.height
-        const uv = raycastUvFromClient(clientX, clientY, rect, camera, object)
+        const uv = sampleProjectionUvBuffer(uvBuffer, x, y)
         if (!uv) {
           reportBakeProgress()
           continue
@@ -949,9 +1073,16 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
             onViewStateChange={updateViewportCameraState}
             onCameraReady={(camera) => {
               projectionCameraRef.current = camera
+              projectionUvBufferRef.current = null
             }}
             onObjectReady={(object) => {
               projectionObjectRef.current = object
+              projectionUvBufferRef.current = null
+            }}
+            onRenderContextReady={(renderer, scene) => {
+              projectionRendererRef.current = renderer
+              projectionSceneRef.current = scene
+              projectionUvBufferRef.current = null
             }}
           />
           {projectionImage && (
@@ -1027,6 +1158,7 @@ interface ViewportSceneProps {
   onMissingUv?: () => void
   onCameraReady?: (camera: THREE.Camera) => void
   onObjectReady?: (object: THREE.Object3D | null) => void
+  onRenderContextReady?: (renderer: THREE.WebGLRenderer, scene: THREE.Scene) => void
 }
 
 function ViewportScene({
@@ -1041,7 +1173,8 @@ function ViewportScene({
   onPointerMove,
   onMissingUv,
   onCameraReady,
-  onObjectReady
+  onObjectReady,
+  onRenderContextReady
 }: ViewportSceneProps): ReactElement {
   return (
     <Canvas
@@ -1055,6 +1188,7 @@ function ViewportScene({
         initialViewState={initialViewState}
         onViewStateChange={onViewStateChange}
         onCameraReady={onCameraReady}
+        onRenderContextReady={onRenderContextReady}
       />
       <Suspense fallback={null}>
         <Environment preset="studio" />
@@ -1108,14 +1242,16 @@ function CameraStateController({
   controlsEnabled,
   initialViewState,
   onViewStateChange,
-  onCameraReady
+  onCameraReady,
+  onRenderContextReady
 }: {
   controlsEnabled: boolean
   initialViewState: ViewportCameraState | null
   onViewStateChange?: (state: ViewportCameraState) => void
   onCameraReady?: (camera: THREE.Camera) => void
+  onRenderContextReady?: (renderer: THREE.WebGLRenderer, scene: THREE.Scene) => void
 }): ReactElement | null {
-  const { camera } = useThree()
+  const { camera, gl, scene } = useThree()
   const controlsRef = useRef<any>(null)
   const fallbackTargetRef = useRef(new THREE.Vector3(0, 0, 0))
   const appliedStateRef = useRef<string | null>(null)
@@ -1124,6 +1260,10 @@ function CameraStateController({
   useEffect(() => {
     onCameraReady?.(camera)
   }, [camera, onCameraReady])
+
+  useEffect(() => {
+    onRenderContextReady?.(gl, scene)
+  }, [gl, scene, onRenderContextReady])
 
   useLayoutEffect(() => {
     if (!initialViewState) {
@@ -1428,6 +1568,45 @@ function getAlphaBounds(data: Uint8ClampedArray, width: number, height: number):
   }
 
   return { left, top, right, bottom }
+}
+
+function createUvEncodeMaterial(): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    vertexShader: `
+      varying vec2 vUv;
+
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      precision highp float;
+      varying vec2 vUv;
+
+      void main() {
+        vec2 encodedUv = clamp(vUv, 0.0, 1.0) * 65535.0;
+        vec2 high = floor(encodedUv / 256.0);
+        vec2 low = floor(mod(encodedUv, 256.0));
+        gl_FragColor = vec4(high.x / 255.0, low.x / 255.0, high.y / 255.0, low.y / 255.0);
+      }
+    `,
+    side: THREE.DoubleSide,
+    depthTest: true,
+    depthWrite: true
+  })
+}
+
+function isDescendantOf(object: THREE.Object3D, ancestor: THREE.Object3D): boolean {
+  let current: THREE.Object3D | null = object
+  while (current) {
+    if (current === ancestor) {
+      return true
+    }
+    current = current.parent
+  }
+
+  return false
 }
 
 function getCoveredImageRect(
