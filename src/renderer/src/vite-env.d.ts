@@ -24,7 +24,9 @@ export interface TextureToolApi {
   openProjectionImage: () => Promise<LoadedTexture | null>
   saveProjectionCapture: (payload: {
     projectionViewDataUrl: string
-  }) => Promise<LoadedTexture>
+    albedoPath?: string | null
+  }) => Promise<{ path: string }>
+  loadProjectionCapture: (path?: string) => Promise<LoadedTexture>
   resetWorkspace: () => Promise<boolean>
   onResetWorkspace: (callback: () => void) => () => void
   saveTexture: (dataUrl: string, suggestedName?: string) => Promise<string | null>

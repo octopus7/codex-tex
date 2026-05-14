@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu } from 'electron'
 import { readFile, writeFile } from 'node:fs/promises'
-import { basename, extname, join } from 'node:path'
+import { basename, dirname, extname, join } from 'node:path'
 
 interface RecentAssets {
   modelPath?: string
@@ -9,6 +9,7 @@ interface RecentAssets {
 
 interface ProjectionCapturePayload {
   projectionViewDataUrl: string
+  albedoPath?: string | null
 }
 
 const imageMimeByExtension = new Map([
@@ -77,12 +78,14 @@ function dataUrlToBuffer(dataUrl: string): Buffer {
 }
 
 async function saveProjectionCapture({
-  projectionViewDataUrl
-}: ProjectionCapturePayload): Promise<{ name: string; path: string; dataUrl: string }> {
-  const generatedPath = join(app.getPath('userData'), 'projection-capture.png')
+  projectionViewDataUrl,
+  albedoPath
+}: ProjectionCapturePayload): Promise<{ path: string }> {
+  const outputDirectory = albedoPath ? dirname(albedoPath) : app.getPath('userData')
+  const generatedPath = join(outputDirectory, 'projection-capture.png')
   await writeFile(generatedPath, dataUrlToBuffer(projectionViewDataUrl))
 
-  return loadTextureFromPath(generatedPath)
+  return { path: generatedPath }
 }
 
 function setupApplicationMenu(mainWindow: BrowserWindow): void {
@@ -218,6 +221,10 @@ ipcMain.handle('asset:open-projection-image', async () => {
 
 ipcMain.handle('asset:save-projection-capture', async (_event, payload: ProjectionCapturePayload) => {
   return saveProjectionCapture(payload)
+})
+
+ipcMain.handle('asset:load-projection-capture', async (_event, path?: string) => {
+  return loadTextureFromPath(path ?? join(app.getPath('userData'), 'projection-capture.png'))
 })
 
 ipcMain.handle('asset:load-initial-assets', async () => {

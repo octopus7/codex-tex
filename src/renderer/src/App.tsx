@@ -24,6 +24,7 @@ export function App(): ReactElement {
   const viewerRef = useRef<ModelViewerHandle>(null)
   const capturingProjectionRef = useRef(false)
   const [isCapturingProjection, setIsCapturingProjection] = useState(false)
+  const [pendingProjectionCapturePath, setPendingProjectionCapturePath] = useState<string | null>(null)
   const {
     model,
     texture,
@@ -77,6 +78,7 @@ export function App(): ReactElement {
     void restoreInitialAssets()
 
     const removeResetListener = window.textureTool.onResetWorkspace(() => {
+      setPendingProjectionCapturePath(null)
       resetWorkspace()
     })
 
@@ -93,6 +95,7 @@ export function App(): ReactElement {
     }
 
     setModel(nextModel)
+    setPendingProjectionCapturePath(null)
     setStatus(`Loaded ${nextModel.name}`)
   }
 
@@ -103,11 +106,31 @@ export function App(): ReactElement {
     }
 
     setTexture(nextTexture)
+    setPendingProjectionCapturePath(null)
     setStatus(`Loaded ${nextTexture.name}`)
   }
 
   async function handleCaptureProjectionImage(): Promise<void> {
     if (capturingProjectionRef.current) {
+      return
+    }
+
+    if (pendingProjectionCapturePath) {
+      capturingProjectionRef.current = true
+      setIsCapturingProjection(true)
+      setStatus('Reloading projection capture...')
+
+      try {
+        const capturedProjectionImage = await window.textureTool.loadProjectionCapture(pendingProjectionCapturePath)
+        setProjectionImage(capturedProjectionImage)
+        setPendingProjectionCapturePath(null)
+        setStatus(`Reloaded ${capturedProjectionImage.name}`)
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : 'Failed to reload projection capture.')
+      } finally {
+        capturingProjectionRef.current = false
+        setIsCapturingProjection(false)
+      }
       return
     }
 
@@ -122,11 +145,12 @@ export function App(): ReactElement {
     setStatus('Capturing Projection View...')
 
     try {
-      const capturedProjectionImage = await window.textureTool.saveProjectionCapture({
-        projectionViewDataUrl
+      const capture = await window.textureTool.saveProjectionCapture({
+        projectionViewDataUrl,
+        albedoPath: texture?.path ?? null
       })
-      setProjectionImage(capturedProjectionImage)
-      setStatus(`Captured and loaded ${capturedProjectionImage.name}`)
+      setPendingProjectionCapturePath(capture.path)
+      setStatus(`Projection View captured to ${capture.path}. Click Reload to load it.`)
     } catch (error) {
       setStatus(error instanceof Error ? error.message : 'Failed to capture Projection View.')
     } finally {
@@ -171,10 +195,16 @@ export function App(): ReactElement {
               className="tool-button"
               onClick={handleCaptureProjectionImage}
               disabled={isCapturingProjection}
-              title="Capture Projection View and load as projection image"
+              title={
+                pendingProjectionCapturePath
+                  ? 'Reload captured Projection View'
+                  : 'Capture Projection View for projection image'
+              }
             >
               <Layers size={18} />
-              <span>{isCapturingProjection ? 'Capturing' : 'Projection'}</span>
+              <span>
+                {isCapturingProjection ? (pendingProjectionCapturePath ? 'Reloading' : 'Capturing') : pendingProjectionCapturePath ? 'Reload' : 'Projection'}
+              </span>
             </button>
             <button type="button" className="tool-button primary" onClick={handleExport} title="Export painted PNG">
               <Download size={18} />
