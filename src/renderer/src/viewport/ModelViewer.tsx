@@ -28,13 +28,23 @@ export interface ModelViewerHandle {
   getTextureDataUrl: () => string | null
   getProjectionViewDataUrl: () => string | null
   getViewportState: () => ViewportCameraState | null
-  bakeProjectionMask: () => boolean
+  bakeProjectionMask: (onProgress?: (progress: ProjectionBakeProgress) => void) => Promise<boolean>
   resetProjectionMask: () => void
+}
+
+export interface ProjectionBakeProgress {
+  completed: number
+  total: number
+  ratio: number
+  hits: number
+  elapsedMs: number
+  remainingMs: number | null
 }
 
 interface ModelViewerProps {
   projectionWindow?: boolean
   initialViewState?: ViewportCameraState | null
+  projectionLocked?: boolean
 }
 
 interface RgbaColor {
@@ -87,7 +97,7 @@ async function decodeTextureDataUrl(dataUrl: string): Promise<ImageBitmap> {
 }
 
 export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(function ModelViewer(
-  { projectionWindow = false, initialViewState = null },
+  { projectionWindow = false, initialViewState = null, projectionLocked = false },
   ref
 ): ReactElement {
   const textureCanvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -146,7 +156,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
     getTextureDataUrl: () => textureCanvasRef.current?.toDataURL('image/png') ?? null,
     getProjectionViewDataUrl: () => captureProjectionView(),
     getViewportState: () => cloneViewportCameraState(viewportCameraStateRef.current),
-    bakeProjectionMask: () => bakeProjectionMask(),
+    bakeProjectionMask: (onProgress) => bakeProjectionMask(onProgress),
     resetProjectionMask: () => resetProjectionMask()
   }))
 
@@ -701,7 +711,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
     context.globalCompositeOperation = 'source-over'
   }
 
-  function bakeProjectionMask(): boolean {
+  async function bakeProjectionMask(onProgress?: (progress: ProjectionBakeProgress) => void): Promise<boolean> {
     const viewport = workViewportRef.current
     const image = projectionImageRef.current
     const imageData = projectionImageDataRef.current
@@ -728,13 +738,44 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
     const coveredRect = getCoveredImageRect(image.naturalWidth, image.naturalHeight, projectionRect.width, projectionRect.height)
     const step = getProjectionBakeSampleStep(maskCanvas.width, maskCanvas.height)
     const stampRadius = getProjectionBakeStampRadius(textureCanvas.width, textureCanvas.height, maskCanvas.width, step)
+    const columnCount = Math.floor((bounds.right - bounds.left) / step) + 1
+    const rowCount = Math.floor((bounds.bottom - bounds.top) / step) + 1
+    const total = Math.max(1, columnCount * rowCount)
+    const startedAt = performance.now()
+    let completed = 0
     let hits = 0
+    let lastProgressAt = 0
 
+    const reportBakeProgress = (force = false): void => {
+      const now = performance.now()
+      if (!force && now - lastProgressAt < 100) {
+        return
+      }
+
+      const elapsedMs = now - startedAt
+      const ratio = clamp(completed / total, 0, 1)
+      const remainingMs = ratio > 0 ? (elapsedMs / ratio) * (1 - ratio) : null
+      lastProgressAt = now
+      onProgress?.({
+        completed,
+        total,
+        ratio,
+        hits,
+        elapsedMs,
+        remainingMs
+      })
+    }
+
+    reportBakeProgress(true)
+
+    let rowsProcessed = 0
     for (let y = bounds.top; y <= bounds.bottom; y += step) {
       for (let x = bounds.left; x <= bounds.right; x += step) {
+        completed += 1
         const pixelOffset = (y * maskData.width + x) * 4
         const maskAlpha = maskData.data[pixelOffset + 3] / 255
         if (maskAlpha <= 0.01) {
+          reportBakeProgress()
           continue
         }
 
@@ -747,6 +788,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
         }
 
         if (projectedColor.a <= 0) {
+          reportBakeProgress()
           continue
         }
 
@@ -754,6 +796,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
         const clientY = rect.top + projectionRect.y + coveredRect.y + ((y + 0.5) / maskCanvas.height) * coveredRect.height
         const uv = raycastUvFromClient(clientX, clientY, rect, camera, object)
         if (!uv) {
+          reportBakeProgress()
           continue
         }
 
@@ -765,10 +808,18 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
           hardness: 0.2
         })
         hits += 1
+        reportBakeProgress()
+      }
+
+      rowsProcessed += 1
+      if (rowsProcessed % 4 === 0 || performance.now() - lastProgressAt >= 100) {
+        reportBakeProgress(true)
+        await waitForAnimationFrame()
       }
     }
 
     if (hits === 0) {
+      reportBakeProgress(true)
       reportStatus('Projection bake did not hit visible UVs under the mask.')
       return false
     }
@@ -776,6 +827,8 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
     uploadEditableTexture()
     publishEditedTexture()
     resetProjectionMask()
+    completed = total
+    reportBakeProgress(true)
     reportStatus(`Baked projection mask with ${hits} samples.`)
 
     return true
@@ -878,7 +931,8 @@ export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(funct
   }
 
   const paintableFromMainViewport = mode === 'paint' || mode === 'erase'
-  const projectionMaskEditable = projectionWindow && (mode === 'projectionPaint' || mode === 'erase') && Boolean(projectionImage)
+  const projectionMaskEditable =
+    projectionWindow && !projectionLocked && (mode === 'projectionPaint' || mode === 'erase') && Boolean(projectionImage)
 
   if (projectionWindow) {
     return (
@@ -1507,6 +1561,12 @@ function expandShortHex(value: string): string {
 
 function rgbaToCss(color: RgbaColor, alpha: number): string {
   return `rgba(${color.r}, ${color.g}, ${color.b}, ${clamp(alpha, 0, 1)})`
+}
+
+function waitForAnimationFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => resolve())
+  })
 }
 
 function clamp(value: number, min: number, max: number): number {

@@ -12,7 +12,12 @@ import {
   SlidersHorizontal,
   Upload
 } from 'lucide-react'
-import { ModelViewer, type ModelViewerHandle, type ViewportCameraState } from './viewport/ModelViewer'
+import {
+  ModelViewer,
+  type ModelViewerHandle,
+  type ProjectionBakeProgress,
+  type ViewportCameraState
+} from './viewport/ModelViewer'
 import { useTextureToolStore, type ToolMode } from './store'
 
 const mainModeOptions: Array<{ mode: Exclude<ToolMode, 'projectionPaint'>; label: string; icon: typeof MousePointer2 }> = [
@@ -283,6 +288,8 @@ function ProjectionWindow(): ReactElement {
   const viewerRef = useRef<ModelViewerHandle>(null)
   const autoCapturedRef = useRef(false)
   const [isBusy, setIsBusy] = useState(false)
+  const [isBaking, setIsBaking] = useState(false)
+  const [bakeProgress, setBakeProgress] = useState<ProjectionBakeProgress | null>(null)
   const [initialAssetsReady, setInitialAssetsReady] = useState(false)
   const [projectionCreatedPath, setProjectionCreatedPath] = useState<string | null>(null)
   const [initialViewState, setInitialViewState] = useState<ViewportCameraState | null>(null)
@@ -418,6 +425,7 @@ function ProjectionWindow(): ReactElement {
 
     setIsBusy(true)
     try {
+      setBakeProgress(null)
       const capturedProjectionImage = await window.textureTool.loadProjectionCapture(
         await resolveProjectionCreatedPath()
       )
@@ -436,10 +444,17 @@ function ProjectionWindow(): ReactElement {
     }
 
     setIsBusy(true)
+    setIsBaking(true)
+    setBakeProgress(null)
     try {
       await waitForRenderFrames(1)
-      viewerRef.current?.bakeProjectionMask()
+      const baked = (await viewerRef.current?.bakeProjectionMask(setBakeProgress)) ?? false
+      if (baked) {
+        await waitForRenderFrames(2)
+        window.close()
+      }
     } finally {
+      setIsBaking(false)
       setIsBusy(false)
     }
   }
@@ -460,9 +475,43 @@ function ProjectionWindow(): ReactElement {
       </header>
       <div className="projection-window-body">
         <section className="projection-window-stage">
-          <ModelViewer ref={viewerRef} projectionWindow initialViewState={initialViewState} />
+          <ModelViewer
+            ref={viewerRef}
+            projectionWindow
+            projectionLocked={isBaking}
+            initialViewState={initialViewState}
+          />
         </section>
         <aside className="projection-sidebar">
+          {bakeProgress && (
+            <section className="panel-section">
+              <div className="section-title">
+                <Check size={16} />
+                <span>Bake</span>
+              </div>
+              <div className="bake-progress">
+                <div className="bake-progress-head">
+                  <span>{Math.round(bakeProgress.ratio * 100)}%</span>
+                  <span>{bakeProgress.completed} / {bakeProgress.total}</span>
+                </div>
+                <progress value={bakeProgress.completed} max={bakeProgress.total} />
+                <dl className="bake-progress-list">
+                  <div>
+                    <dt>Elapsed</dt>
+                    <dd>{formatDuration(bakeProgress.elapsedMs)}</dd>
+                  </div>
+                  <div>
+                    <dt>Remaining</dt>
+                    <dd>{formatDuration(bakeProgress.remainingMs)}</dd>
+                  </div>
+                  <div>
+                    <dt>Hits</dt>
+                    <dd>{bakeProgress.hits}</dd>
+                  </div>
+                </dl>
+              </div>
+            </section>
+          )}
           <section className="panel-section">
             <div className="section-title">
               <Layers size={16} />
@@ -474,7 +523,7 @@ function ProjectionWindow(): ReactElement {
                 className={mode === 'projectionPaint' ? 'tool-button active' : 'tool-button'}
                 onClick={() => setMode('projectionPaint')}
                 title="Paint projection mask"
-                disabled={isBusy}
+                disabled={isBaking}
               >
                 <Layers size={18} />
                 <span>Mask</span>
@@ -484,7 +533,7 @@ function ProjectionWindow(): ReactElement {
                 className={mode === 'erase' ? 'tool-button active' : 'tool-button'}
                 onClick={() => setMode('erase')}
                 title="Erase projection mask"
-                disabled={isBusy}
+                disabled={isBaking}
               >
                 <Eraser size={18} />
                 <span>Erase</span>
@@ -503,6 +552,7 @@ function ProjectionWindow(): ReactElement {
                 min="0"
                 max="100"
                 value={Math.round(projectionOpacity * 100)}
+                disabled={isBaking}
                 onChange={(event) => setProjectionOpacity(Number(event.currentTarget.value) / 100)}
               />
             </label>
@@ -513,6 +563,7 @@ function ProjectionWindow(): ReactElement {
                 min="4"
                 max="180"
                 value={brushSize}
+                disabled={isBaking}
                 onChange={(event) => setBrushSize(Number(event.currentTarget.value))}
               />
             </label>
@@ -523,6 +574,7 @@ function ProjectionWindow(): ReactElement {
                 min="5"
                 max="100"
                 value={Math.round(brushStrength * 100)}
+                disabled={isBaking}
                 onChange={(event) => setBrushStrength(Number(event.currentTarget.value) / 100)}
               />
             </label>
@@ -533,6 +585,7 @@ function ProjectionWindow(): ReactElement {
                 min="0"
                 max="100"
                 value={Math.round(brushHardness * 100)}
+                disabled={isBaking}
                 onChange={(event) => setBrushHardness(Number(event.currentTarget.value) / 100)}
               />
             </label>
@@ -556,4 +609,20 @@ function waitForRenderFrames(count: number): Promise<void> {
 
     next(count)
   })
+}
+
+function formatDuration(milliseconds: number | null): string {
+  if (milliseconds === null || !Number.isFinite(milliseconds)) {
+    return '-'
+  }
+
+  const totalSeconds = Math.max(0, Math.ceil(milliseconds / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+
+  if (minutes === 0) {
+    return `${seconds}s`
+  }
+
+  return `${minutes}m ${seconds.toString().padStart(2, '0')}s`
 }
