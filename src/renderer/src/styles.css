@@ -189,62 +189,71 @@ button {
 .projection-window-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 16px;
+  justify-content: flex-end;
   min-width: 0;
   padding: 11px 14px;
   border-bottom: 1px solid var(--line);
   background: var(--panel-strong);
 }
 
-.projection-window-toolbar strong {
-  overflow: hidden;
-  color: #1f2422;
-  font-size: 15px;
-  line-height: 1;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .projection-window-actions {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  flex-wrap: wrap;
   gap: 8px;
 }
 
 .projection-window-actions .tool-button {
-  min-width: 76px;
+  min-width: 92px;
+}
+
+.projection-window-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  min-width: 0;
+  min-height: 0;
 }
 
 .projection-overlay-control {
-  display: inline-flex;
-  align-items: center;
+  display: grid;
   gap: 10px;
-  min-width: 190px;
+  min-width: 0;
   color: var(--text-subtle);
   font-size: 13px;
-  white-space: nowrap;
 }
 
 .projection-overlay-control input {
-  width: 108px;
+  width: 100%;
 }
 
 .projection-compact-control {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 148px;
+  display: grid;
+  gap: 10px;
+  min-width: 0;
   color: var(--text-subtle);
-  font-size: 12px;
-  white-space: nowrap;
+  font-size: 13px;
 }
 
 .projection-compact-control input {
-  width: 72px;
+  width: 100%;
+}
+
+.projection-tool-group {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.projection-tool-group .tool-button {
+  width: 100%;
+  min-width: 0;
+}
+
+.projection-sidebar {
+  min-width: 0;
+  overflow: auto;
+  border-left: 1px solid var(--line);
+  background: var(--panel);
 }
 
 .projection-window-stage {
@@ -257,8 +266,8 @@ button {
 }
 
 .projection-square-viewport {
-  width: min(calc(100vw - 32px), calc(100vh - 168px));
-  height: min(calc(100vw - 32px), calc(100vh - 168px));
+  width: min(calc(100vw - 328px), calc(100vh - 90px));
+  height: min(calc(100vw - 328px), calc(100vh - 90px));
   min-width: 0;
   min-height: 0;
   overflow: hidden;
