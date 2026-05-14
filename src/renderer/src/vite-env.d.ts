@@ -12,10 +12,21 @@ export interface LoadedTexture {
   dataUrl: string
 }
 
+export interface InitialAssets {
+  model: LoadedObj | null
+  texture: LoadedTexture | null
+}
+
 export interface TextureToolApi {
+  loadInitialAssets: () => Promise<InitialAssets>
   openObj: () => Promise<LoadedObj | null>
   openTexture: () => Promise<LoadedTexture | null>
   openProjectionImage: () => Promise<LoadedTexture | null>
+  saveProjectionCapture: (payload: {
+    projectionViewDataUrl: string
+  }) => Promise<LoadedTexture>
+  resetWorkspace: () => Promise<boolean>
+  onResetWorkspace: (callback: () => void) => () => void
   saveTexture: (dataUrl: string, suggestedName?: string) => Promise<string | null>
 }
 

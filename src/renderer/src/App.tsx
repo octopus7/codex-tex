@@ -1,4 +1,4 @@
-import { type ReactElement, useRef } from 'react'
+import { type ReactElement, useEffect, useRef, useState } from 'react'
 import {
   Brush,
   Download,
@@ -22,6 +22,8 @@ const modeOptions: Array<{ mode: ToolMode; label: string; icon: typeof MousePoin
 
 export function App(): ReactElement {
   const viewerRef = useRef<ModelViewerHandle>(null)
+  const capturingProjectionRef = useRef(false)
+  const [isCapturingProjection, setIsCapturingProjection] = useState(false)
   const {
     model,
     texture,
@@ -44,8 +46,45 @@ export function App(): ReactElement {
     setBrushStrength,
     setBrushHardness,
     setProjectionOpacity,
-    setStatus
+    setStatus,
+    resetWorkspace
   } = useTextureToolStore()
+
+  useEffect(() => {
+    let alive = true
+
+    async function restoreInitialAssets(): Promise<void> {
+      const initialAssets = await window.textureTool.loadInitialAssets()
+      if (!alive) {
+        return
+      }
+
+      if (initialAssets.model) {
+        setModel(initialAssets.model)
+      }
+
+      if (initialAssets.texture) {
+        setTexture(initialAssets.texture)
+      }
+
+      if (initialAssets.model || initialAssets.texture) {
+        setStatus(
+          `Restored ${[initialAssets.model?.name, initialAssets.texture?.name].filter(Boolean).join(' / ')}`
+        )
+      }
+    }
+
+    void restoreInitialAssets()
+
+    const removeResetListener = window.textureTool.onResetWorkspace(() => {
+      resetWorkspace()
+    })
+
+    return () => {
+      alive = false
+      removeResetListener()
+    }
+  }, [resetWorkspace, setModel, setStatus, setTexture])
 
   async function handleOpenObj(): Promise<void> {
     const nextModel = await window.textureTool.openObj()
@@ -67,14 +106,33 @@ export function App(): ReactElement {
     setStatus(`Loaded ${nextTexture.name}`)
   }
 
-  async function handleOpenProjectionImage(): Promise<void> {
-    const nextProjectionImage = await window.textureTool.openProjectionImage()
-    if (!nextProjectionImage) {
+  async function handleCaptureProjectionImage(): Promise<void> {
+    if (capturingProjectionRef.current) {
       return
     }
 
-    setProjectionImage(nextProjectionImage)
-    setStatus(`Loaded projection image ${nextProjectionImage.name}`)
+    const projectionViewDataUrl = viewerRef.current?.getProjectionViewDataUrl()
+    if (!projectionViewDataUrl) {
+      setStatus('Projection View is not ready to capture.')
+      return
+    }
+
+    capturingProjectionRef.current = true
+    setIsCapturingProjection(true)
+    setStatus('Capturing Projection View...')
+
+    try {
+      const capturedProjectionImage = await window.textureTool.saveProjectionCapture({
+        projectionViewDataUrl
+      })
+      setProjectionImage(capturedProjectionImage)
+      setStatus(`Captured and loaded ${capturedProjectionImage.name}`)
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Failed to capture Projection View.')
+    } finally {
+      capturingProjectionRef.current = false
+      setIsCapturingProjection(false)
+    }
   }
 
   async function handleExport(): Promise<void> {
@@ -111,11 +169,12 @@ export function App(): ReactElement {
             <button
               type="button"
               className="tool-button"
-              onClick={handleOpenProjectionImage}
-              title="Open projection image"
+              onClick={handleCaptureProjectionImage}
+              disabled={isCapturingProjection}
+              title="Capture Projection View and load as projection image"
             >
               <Layers size={18} />
-              <span>Projection</span>
+              <span>{isCapturingProjection ? 'Capturing' : 'Projection'}</span>
             </button>
             <button type="button" className="tool-button primary" onClick={handleExport} title="Export painted PNG">
               <Download size={18} />

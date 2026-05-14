@@ -28,9 +28,10 @@ interface TextureToolState {
   setTextureResolution: (textureResolution: string) => void
   setLastUv: (lastUv: string) => void
   setStatus: (status: string) => void
+  resetWorkspace: () => void
 }
 
-export const useTextureToolStore = create<TextureToolState>((set) => ({
+const initialTextureToolState = {
   model: null,
   texture: null,
   projectionImage: null,
@@ -42,7 +43,26 @@ export const useTextureToolStore = create<TextureToolState>((set) => ({
   projectionOpacity: 0.45,
   textureResolution: '1024 x 1024',
   lastUv: '-',
-  status: 'Load an OBJ, albedo texture, and optional projection image.',
+  status: 'Load an OBJ, albedo texture, and optional projection image.'
+} satisfies Omit<
+  TextureToolState,
+  | 'setModel'
+  | 'setTexture'
+  | 'setProjectionImage'
+  | 'setMode'
+  | 'setBrushColor'
+  | 'setBrushSize'
+  | 'setBrushStrength'
+  | 'setBrushHardness'
+  | 'setProjectionOpacity'
+  | 'setTextureResolution'
+  | 'setLastUv'
+  | 'setStatus'
+  | 'resetWorkspace'
+>
+
+export const useTextureToolStore = create<TextureToolState>((set) => ({
+  ...initialTextureToolState,
   setModel: (model) => set({ model }),
   setTexture: (texture) => set({ texture }),
   setProjectionImage: (projectionImage) => set({ projectionImage }),
@@ -54,5 +74,6 @@ export const useTextureToolStore = create<TextureToolState>((set) => ({
   setProjectionOpacity: (projectionOpacity) => set({ projectionOpacity }),
   setTextureResolution: (textureResolution) => set({ textureResolution }),
   setLastUv: (lastUv) => set({ lastUv }),
-  setStatus: (status) => set({ status })
+  setStatus: (status) => set({ status }),
+  resetWorkspace: () => set({ ...initialTextureToolState, status: 'Workspace reset.' })
 }))

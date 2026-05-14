@@ -16,6 +16,7 @@ import { useTextureToolStore } from '../store'
 
 export interface ModelViewerHandle {
   getTextureDataUrl: () => string | null
+  getProjectionViewDataUrl: () => string | null
 }
 
 interface RgbaColor {
@@ -26,6 +27,25 @@ interface RgbaColor {
 }
 
 const DEFAULT_TEXTURE_SIZE = 1024
+const PROJECTION_CAPTURE_SIZE = 2048
+
+function createEditableTexture(canvas: HTMLCanvasElement): THREE.CanvasTexture {
+  const texture = new THREE.CanvasTexture(canvas)
+  texture.colorSpace = THREE.SRGBColorSpace
+  texture.flipY = true
+  texture.wrapS = THREE.RepeatWrapping
+  texture.wrapT = THREE.RepeatWrapping
+  texture.needsUpdate = true
+
+  return texture
+}
+
+async function decodeTextureDataUrl(dataUrl: string): Promise<ImageBitmap> {
+  const response = await fetch(dataUrl)
+  const blob = await response.blob()
+
+  return createImageBitmap(blob)
+}
 
 export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_props, ref): ReactElement {
   const textureCanvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -37,7 +57,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
   const projectionContextRef = useRef<CanvasRenderingContext2D | null>(null)
   const raycasterRef = useRef(new THREE.Raycaster())
   const drawingRef = useRef(false)
-  const [, setTextureRevision] = useState(0)
+  const [textureRevision, setTextureRevision] = useState(0)
   const {
     model,
     texture,
@@ -53,7 +73,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
     setStatus
   } = useTextureToolStore()
 
-  const editableTexture = useMemo(() => {
+  const [editableTexture, setEditableTexture] = useState(() => {
     const canvas = document.createElement('canvas')
     const baseCanvas = document.createElement('canvas')
     canvas.width = DEFAULT_TEXTURE_SIZE
@@ -65,26 +85,23 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
     drawFallbackTexture(canvas)
     drawFallbackTexture(baseCanvas)
 
-    const nextTexture = new THREE.CanvasTexture(canvas)
-    nextTexture.colorSpace = THREE.SRGBColorSpace
-    nextTexture.flipY = true
-    nextTexture.wrapS = THREE.RepeatWrapping
-    nextTexture.wrapT = THREE.RepeatWrapping
+    const nextTexture = createEditableTexture(canvas)
     textureRef.current = nextTexture
 
     return nextTexture
-  }, [])
+  })
 
   useImperativeHandle(ref, () => ({
-    getTextureDataUrl: () => textureCanvasRef.current?.toDataURL('image/png') ?? null
+    getTextureDataUrl: () => textureCanvasRef.current?.toDataURL('image/png') ?? null,
+    getProjectionViewDataUrl: () => captureProjectionView()
   }))
 
   useEffect(() => {
     let alive = true
 
     async function loadTextureImage(dataUrl: string): Promise<void> {
-      const image = new window.Image()
-      image.onload = () => {
+      try {
+        const image = await decodeTextureDataUrl(dataUrl)
         if (!alive || !textureCanvasRef.current || !textureRef.current) {
           return
         }
@@ -95,10 +112,10 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
           return
         }
 
-        canvas.width = image.naturalWidth
-        canvas.height = image.naturalHeight
-        baseCanvas.width = image.naturalWidth
-        baseCanvas.height = image.naturalHeight
+        canvas.width = image.width
+        canvas.height = image.height
+        baseCanvas.width = image.width
+        baseCanvas.height = image.height
 
         const context = canvas.getContext('2d')
         const baseContext = baseCanvas.getContext('2d')
@@ -106,15 +123,15 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
         baseContext?.clearRect(0, 0, baseCanvas.width, baseCanvas.height)
         context?.drawImage(image, 0, 0)
         baseContext?.drawImage(image, 0, 0)
-        uploadEditableTexture()
+        image.close()
+        uploadEditableTexture(true)
         setTextureResolution(`${canvas.width} x ${canvas.height}`)
-      }
-      image.onerror = () => {
+        setStatus(`Applied ${texture?.name ?? 'albedo texture'} (${canvas.width} x ${canvas.height})`)
+      } catch {
         if (alive) {
           setStatus('The selected albedo texture could not be decoded.')
         }
       }
-      image.src = dataUrl
     }
 
     if (texture?.dataUrl) {
@@ -124,7 +141,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
     return () => {
       alive = false
     }
-  }, [setStatus, setTextureResolution, texture?.dataUrl])
+  }, [setStatus, setTextureResolution, texture?.dataUrl, texture?.name])
 
   useEffect(() => {
     const canvas = textureCanvasRef.current
@@ -138,7 +155,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
         drawFallbackTexture(baseCanvas)
       }
       drawFallbackTexture(canvas)
-      uploadEditableTexture()
+      uploadEditableTexture(true)
       setTextureResolution(`${DEFAULT_TEXTURE_SIZE} x ${DEFAULT_TEXTURE_SIZE}`)
     }
   }, [setTextureResolution, texture])
@@ -232,12 +249,21 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
     const centerX = event.nativeEvent.clientX
     const centerY = event.nativeEvent.clientY
     const radius = brushSize / 2
-    const sampleStep = Math.max(2, Math.round(radius / 7))
-    const stampRadius = Math.max(1.4, sampleStep * 0.65)
+    const sampleStep = radius <= 44 ? 2 : 3
+    const stampRadius = estimateProjectionStampRadius(
+      centerX,
+      centerY,
+      rect,
+      event.camera,
+      event.eventObject,
+      centerUv,
+      sampleStep
+    )
     let hits = 0
 
-    for (let y = -radius; y <= radius; y += sampleStep) {
-      for (let x = -radius; x <= radius; x += sampleStep) {
+    for (let y = -radius, rowIndex = 0; y <= radius; y += sampleStep, rowIndex += 1) {
+      const stagger = rowIndex % 2 === 0 ? 0 : sampleStep * 0.5
+      for (let x = -radius + stagger; x <= radius; x += sampleStep) {
         const distance = Math.hypot(x, y)
         if (distance > radius) {
           continue
@@ -261,7 +287,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
           color: projectedColor,
           strength: brushStrength * falloff * projectedColor.a,
           radius: stampRadius,
-          hardness: 0.45
+          hardness: 0.15
         })
         hits += 1
       }
@@ -276,6 +302,45 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
     setLastUv(`${centerUv.x.toFixed(3)}, ${centerUv.y.toFixed(3)}`)
   }
 
+  function estimateProjectionStampRadius(
+    clientX: number,
+    clientY: number,
+    rect: DOMRect,
+    camera: THREE.Camera,
+    target: THREE.Object3D,
+    centerUv: THREE.Vector2,
+    sampleStep: number
+  ): number {
+    const canvas = textureCanvasRef.current
+    if (!canvas) {
+      return Math.max(2, sampleStep)
+    }
+
+    const offsets = [
+      [sampleStep, 0],
+      [-sampleStep, 0],
+      [0, sampleStep],
+      [0, -sampleStep]
+    ]
+    let maxDistance = 0
+
+    for (const [offsetX, offsetY] of offsets) {
+      const uv = raycastUvFromClient(clientX + offsetX, clientY + offsetY, rect, camera, target)
+      if (!uv) {
+        continue
+      }
+
+      const deltaX = (uv.x - centerUv.x) * canvas.width
+      const deltaY = (uv.y - centerUv.y) * canvas.height
+      const distance = Math.hypot(deltaX, deltaY)
+      if (Number.isFinite(distance)) {
+        maxDistance = Math.max(maxDistance, distance)
+      }
+    }
+
+    return clamp(maxDistance * 0.95, 2.5, 18)
+  }
+
   function sampleProjectionColor(clientX: number, clientY: number, rect: DOMRect): RgbaColor | null {
     const image = projectionImageRef.current
     const context = projectionContextRef.current
@@ -283,16 +348,29 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
       return null
     }
 
-    const contained = getContainedImageRect(image.naturalWidth, image.naturalHeight, rect.width, rect.height)
-    const localX = clientX - rect.left - contained.x
-    const localY = clientY - rect.top - contained.y
+    const projectionRect = getProjectionOverlayRect(rect.width, rect.height)
+    const localElementX = clientX - rect.left - projectionRect.x
+    const localElementY = clientY - rect.top - projectionRect.y
 
-    if (localX < 0 || localY < 0 || localX > contained.width || localY > contained.height) {
+    if (
+      localElementX < 0 ||
+      localElementY < 0 ||
+      localElementX > projectionRect.width ||
+      localElementY > projectionRect.height
+    ) {
       return null
     }
 
-    const sourceX = clamp(Math.floor((localX / contained.width) * image.naturalWidth), 0, image.naturalWidth - 1)
-    const sourceY = clamp(Math.floor((localY / contained.height) * image.naturalHeight), 0, image.naturalHeight - 1)
+    const covered = getCoveredImageRect(
+      image.naturalWidth,
+      image.naturalHeight,
+      projectionRect.width,
+      projectionRect.height
+    )
+    const localImageX = localElementX - covered.x
+    const localImageY = localElementY - covered.y
+    const sourceX = clamp(Math.floor((localImageX / covered.width) * image.naturalWidth), 0, image.naturalWidth - 1)
+    const sourceY = clamp(Math.floor((localImageY / covered.height) * image.naturalHeight), 0, image.naturalHeight - 1)
     const pixel = context.getImageData(sourceX, sourceY, 1, 1).data
 
     return {
@@ -405,18 +483,63 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
     context.drawImage(tempCanvas, left, top)
   }
 
-  function uploadEditableTexture(): void {
+  function uploadEditableTexture(rebuild = false): void {
     const canvas = textureCanvasRef.current
     const textureMap = textureRef.current
     if (!canvas || !textureMap) {
       return
     }
 
+    if (rebuild) {
+      const nextTexture = createEditableTexture(canvas)
+      textureMap.dispose()
+      textureRef.current = nextTexture
+      setEditableTexture(nextTexture)
+      setTextureRevision((revision) => revision + 1)
+      return
+    }
+
     textureMap.source.data = canvas
     textureMap.colorSpace = THREE.SRGBColorSpace
+    textureMap.flipY = true
     textureMap.needsUpdate = true
     setTextureRevision((revision) => revision + 1)
   }
+
+  function captureProjectionView(): string | null {
+    const viewport = workViewportRef.current
+    const sourceCanvas = viewport?.querySelector('canvas')
+    if (!viewport || !sourceCanvas) {
+      return null
+    }
+
+    const output = document.createElement('canvas')
+    output.width = PROJECTION_CAPTURE_SIZE
+    output.height = PROJECTION_CAPTURE_SIZE
+    const context = output.getContext('2d')
+    if (!context) {
+      return null
+    }
+
+    const crop = getCenteredSquareCrop(sourceCanvas.width, sourceCanvas.height)
+    context.fillStyle = '#e9e6dc'
+    context.fillRect(0, 0, output.width, output.height)
+    context.drawImage(
+      sourceCanvas,
+      crop.x,
+      crop.y,
+      crop.size,
+      crop.size,
+      0,
+      0,
+      output.width,
+      output.height
+    )
+
+    return output.toDataURL('image/png')
+  }
+
+  const paintableFromAnyViewport = mode === 'paint' || mode === 'erase'
 
   return (
     <div className="viewport-grid">
@@ -425,6 +548,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
         <ViewportScene
           modelContent={model?.content ?? null}
           texture={editableTexture}
+          textureRevision={textureRevision}
           controlsEnabled={mode === 'orbit'}
           onPointerDown={(event) => {
             drawingRef.current = true
@@ -454,7 +578,30 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
 
       <div className="viewport-wrap">
         <ViewportLabel title="Result View" subtitle="Final texture" />
-        <ViewportScene modelContent={model?.content ?? null} texture={editableTexture} controlsEnabled />
+        <ViewportScene
+          modelContent={model?.content ?? null}
+          texture={editableTexture}
+          textureRevision={textureRevision}
+          controlsEnabled={!paintableFromAnyViewport}
+          onPointerDown={
+            paintableFromAnyViewport
+              ? (event) => {
+                  drawingRef.current = true
+                  paintFromEvent(event)
+                }
+              : undefined
+          }
+          onPointerMove={
+            paintableFromAnyViewport
+              ? (event) => {
+                  if (drawingRef.current) {
+                    paintFromEvent(event)
+                  }
+                }
+              : undefined
+          }
+          onMissingUv={() => setStatus('The selected mesh has no UV at the pointer hit.')}
+        />
         {!model && <EmptyOverlay title="No result yet" body="The final view updates after an OBJ is loaded." />}
       </div>
     </div>
@@ -464,6 +611,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
 interface ViewportSceneProps {
   modelContent: string | null
   texture: THREE.Texture
+  textureRevision: number
   controlsEnabled: boolean
   onPointerDown?: (event: ThreeEvent<PointerEvent>) => void
   onPointerMove?: (event: ThreeEvent<PointerEvent>) => void
@@ -473,6 +621,7 @@ interface ViewportSceneProps {
 function ViewportScene({
   modelContent,
   texture,
+  textureRevision,
   controlsEnabled,
   onPointerDown,
   onPointerMove,
@@ -485,8 +634,6 @@ function ViewportScene({
       gl={{ antialias: true, preserveDrawingBuffer: true }}
     >
       <color attach="background" args={['#e9e6dc']} />
-      <ambientLight intensity={0.75} />
-      <directionalLight position={[5, 6, 4]} intensity={2.1} />
       <Suspense fallback={null}>
         <Environment preset="studio" />
         {modelContent ? (
@@ -569,10 +716,12 @@ function LoadedObj({
       const material = child.material
       if (Array.isArray(material)) {
         material.forEach((entry) => {
-          entry.map = texture
-          entry.needsUpdate = true
+          if (entry instanceof THREE.MeshBasicMaterial) {
+            entry.map = texture
+            entry.needsUpdate = true
+          }
         })
-      } else {
+      } else if (material instanceof THREE.MeshBasicMaterial) {
         material.map = texture
         material.needsUpdate = true
       }
@@ -692,13 +841,13 @@ function brushFalloff(normalizedDistance: number, hardness: number): number {
   return 1 - smooth
 }
 
-function getContainedImageRect(
+function getCoveredImageRect(
   imageWidth: number,
   imageHeight: number,
   boundsWidth: number,
   boundsHeight: number
 ): { x: number; y: number; width: number; height: number } {
-  const scale = Math.min(boundsWidth / imageWidth, boundsHeight / imageHeight)
+  const scale = Math.max(boundsWidth / imageWidth, boundsHeight / imageHeight)
   const width = imageWidth * scale
   const height = imageHeight * scale
 
@@ -707,6 +856,30 @@ function getContainedImageRect(
     y: (boundsHeight - height) / 2,
     width,
     height
+  }
+}
+
+function getProjectionOverlayRect(
+  boundsWidth: number,
+  boundsHeight: number
+): { x: number; y: number; width: number; height: number } {
+  const size = Math.min(boundsWidth, boundsHeight)
+
+  return {
+    x: (boundsWidth - size) / 2,
+    y: (boundsHeight - size) / 2,
+    width: size,
+    height: size
+  }
+}
+
+function getCenteredSquareCrop(width: number, height: number): { x: number; y: number; size: number } {
+  const size = Math.min(width, height)
+
+  return {
+    x: (width - size) / 2,
+    y: (height - size) / 2,
+    size
   }
 }
 

@@ -17,6 +17,7 @@ npm run dev
 - 좌측 Projection View / 우측 Result View 분리
 - UV 기반 Paint/Erase 브러시
 - Projection Paint 브러시와 반투명 projection image overlay
+- Projection View 캡처 후 projection image로 재로드
 - 브러시 size/strength/hardness 조정
 - 편집된 albedo PNG export
 코덱스 텍스쳐 프로젝션 툴
