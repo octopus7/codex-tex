@@ -1,0 +1,275 @@
+:root {
+  color: #252525;
+  background: #f5f4ef;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  --panel: #f7f6f1;
+  --panel-strong: #ffffff;
+  --line: #d8d4cb;
+  --line-strong: #b8b1a5;
+  --text-subtle: #68635b;
+  --accent: #1f7a6b;
+  --accent-strong: #115f53;
+  --accent-soft: #dcebe6;
+  --danger-soft: #f4dfd8;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  color: inherit;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  width: 100%;
+  height: 100%;
+  background: #f2f0e9;
+}
+
+.workspace {
+  display: grid;
+  grid-template-rows: 76px minmax(0, 1fr);
+  min-width: 0;
+  border-right: 1px solid var(--line);
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  min-width: 0;
+  padding: 14px 18px;
+  background: var(--panel-strong);
+  border-bottom: 1px solid var(--line);
+}
+
+.topbar h1 {
+  margin: 0;
+  color: #1f2422;
+  font-size: 20px;
+  line-height: 1.1;
+  letter-spacing: 0;
+}
+
+.topbar p {
+  max-width: min(62vw, 820px);
+  margin: 7px 0 0;
+  overflow: hidden;
+  color: var(--text-subtle);
+  font-size: 13px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.topbar-actions,
+.segmented-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tool-button,
+.segmented-control button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fbfaf6;
+  cursor: pointer;
+}
+
+.tool-button {
+  min-width: 94px;
+  padding: 0 13px;
+}
+
+.tool-button:hover,
+.segmented-control button:hover {
+  border-color: var(--line-strong);
+  background: #ffffff;
+}
+
+.tool-button.primary {
+  border-color: var(--accent-strong);
+  background: var(--accent);
+  color: #ffffff;
+}
+
+.tool-button.primary:hover {
+  background: var(--accent-strong);
+}
+
+.viewport-wrap {
+  position: relative;
+  min-height: 0;
+}
+
+.viewport-wrap canvas {
+  display: block;
+  outline: none;
+}
+
+.viewport-empty {
+  position: absolute;
+  left: 24px;
+  bottom: 24px;
+  display: grid;
+  gap: 3px;
+  width: 230px;
+  padding: 14px 15px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 12px 32px rgba(57, 53, 45, 0.12);
+  pointer-events: none;
+}
+
+.viewport-empty strong {
+  font-size: 14px;
+}
+
+.viewport-empty span {
+  color: var(--text-subtle);
+  font-size: 12px;
+}
+
+.inspector {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-width: 0;
+  background: var(--panel);
+}
+
+.panel-section {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #393832;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.segmented-control {
+  width: 100%;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ece9df;
+}
+
+.segmented-control button {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  border-color: transparent;
+  background: transparent;
+  font-size: 12px;
+}
+
+.segmented-control button.active {
+  border-color: #c7d9d4;
+  background: #ffffff;
+  color: var(--accent-strong);
+  box-shadow: 0 1px 4px rgba(41, 38, 33, 0.1);
+}
+
+.control-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-subtle);
+  font-size: 13px;
+}
+
+.control-row input[type='color'] {
+  width: 44px;
+  height: 32px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #ffffff;
+}
+
+.control-block {
+  display: grid;
+  gap: 10px;
+  color: var(--text-subtle);
+  font-size: 13px;
+}
+
+input[type='range'] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.asset-list {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+}
+
+.asset-list div {
+  display: grid;
+  gap: 4px;
+}
+
+.asset-list dt {
+  color: var(--text-subtle);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.asset-list dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #2b2a25;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+@media (max-width: 1120px) {
+  .app-shell {
+    grid-template-columns: minmax(0, 1fr) 286px;
+  }
+
+  .tool-button {
+    min-width: 72px;
+  }
+}
