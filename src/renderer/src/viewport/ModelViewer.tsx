@@ -55,23 +55,25 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
   const projectionImageRef = useRef<HTMLImageElement | null>(null)
   const projectionSamplerRef = useRef<HTMLCanvasElement | null>(null)
   const projectionContextRef = useRef<CanvasRenderingContext2D | null>(null)
+  const projectionImageDataRef = useRef<ImageData | null>(null)
   const raycasterRef = useRef(new THREE.Raycaster())
   const drawingRef = useRef(false)
+  const lastUvUpdateAtRef = useRef(0)
+  const pendingLastUvRef = useRef<string | null>(null)
+  const statusUpdateAtRef = useRef(0)
   const [textureRevision, setTextureRevision] = useState(0)
-  const {
-    model,
-    texture,
-    projectionImage,
-    mode,
-    brushColor,
-    brushSize,
-    brushStrength,
-    brushHardness,
-    projectionOpacity,
-    setTextureResolution,
-    setLastUv,
-    setStatus
-  } = useTextureToolStore()
+  const model = useTextureToolStore((state) => state.model)
+  const texture = useTextureToolStore((state) => state.texture)
+  const projectionImage = useTextureToolStore((state) => state.projectionImage)
+  const mode = useTextureToolStore((state) => state.mode)
+  const brushColor = useTextureToolStore((state) => state.brushColor)
+  const brushSize = useTextureToolStore((state) => state.brushSize)
+  const brushStrength = useTextureToolStore((state) => state.brushStrength)
+  const brushHardness = useTextureToolStore((state) => state.brushHardness)
+  const projectionOpacity = useTextureToolStore((state) => state.projectionOpacity)
+  const setTextureResolution = useTextureToolStore((state) => state.setTextureResolution)
+  const setLastUv = useTextureToolStore((state) => state.setLastUv)
+  const setStatus = useTextureToolStore((state) => state.setStatus)
 
   const [editableTexture, setEditableTexture] = useState(() => {
     const canvas = document.createElement('canvas')
@@ -166,6 +168,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
     if (!projectionImage?.dataUrl) {
       projectionImageRef.current = null
       projectionContextRef.current = null
+      projectionImageDataRef.current = null
       return
     }
 
@@ -186,6 +189,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
 
       projectionImageRef.current = image
       projectionContextRef.current = context
+      projectionImageDataRef.current = context?.getImageData(0, 0, sampler.width, sampler.height) ?? null
     }
     image.src = projectionImage.dataUrl
 
@@ -197,11 +201,12 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
   useEffect(() => {
     function finishStroke(): void {
       drawingRef.current = false
+      flushPendingLastUv()
     }
 
     window.addEventListener('pointerup', finishStroke)
     return () => window.removeEventListener('pointerup', finishStroke)
-  }, [])
+  }, [setLastUv])
 
   function paintFromEvent(event: ThreeEvent<PointerEvent>): void {
     if (mode === 'orbit') {
@@ -209,7 +214,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
     }
 
     if (!event.uv) {
-      setStatus('The selected mesh has no UV at the pointer hit.')
+      reportStatus('The selected mesh has no UV at the pointer hit.')
       return
     }
 
@@ -232,7 +237,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
       })
     }
     uploadEditableTexture()
-    setLastUv(`${event.uv.x.toFixed(3)}, ${event.uv.y.toFixed(3)}`)
+    reportLastUv(event.uv)
   }
 
   function paintProjectionFromEvent(event: ThreeEvent<PointerEvent>, centerUv: THREE.Vector2): void {
@@ -241,7 +246,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
     const projectionContext = projectionContextRef.current
 
     if (!viewport || !image || !projectionContext) {
-      setStatus('Load a projection image before using Projection Paint.')
+      reportStatus('Load a projection image before using Projection Paint.')
       return
     }
 
@@ -249,7 +254,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
     const centerX = event.nativeEvent.clientX
     const centerY = event.nativeEvent.clientY
     const radius = brushSize / 2
-    const sampleStep = radius <= 44 ? 2 : 3
+    const sampleStep = getProjectionSampleStep(radius)
     const stampRadius = estimateProjectionStampRadius(
       centerX,
       centerY,
@@ -294,12 +299,12 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
     }
 
     if (hits === 0) {
-      setStatus('Projection Paint did not hit visible UVs under the brush.')
+      reportStatus('Projection Paint did not hit visible UVs under the brush.')
       return
     }
 
     uploadEditableTexture()
-    setLastUv(`${centerUv.x.toFixed(3)}, ${centerUv.y.toFixed(3)}`)
+    reportLastUv(centerUv)
   }
 
   function estimateProjectionStampRadius(
@@ -338,13 +343,13 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
       }
     }
 
-    return clamp(maxDistance * 0.95, 2.5, 18)
+    return clamp(maxDistance * 1.2, 3, 24)
   }
 
   function sampleProjectionColor(clientX: number, clientY: number, rect: DOMRect): RgbaColor | null {
     const image = projectionImageRef.current
-    const context = projectionContextRef.current
-    if (!image || !context) {
+    const imageData = projectionImageDataRef.current
+    if (!image || !imageData) {
       return null
     }
 
@@ -371,13 +376,14 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
     const localImageY = localElementY - covered.y
     const sourceX = clamp(Math.floor((localImageX / covered.width) * image.naturalWidth), 0, image.naturalWidth - 1)
     const sourceY = clamp(Math.floor((localImageY / covered.height) * image.naturalHeight), 0, image.naturalHeight - 1)
-    const pixel = context.getImageData(sourceX, sourceY, 1, 1).data
+    const pixelOffset = (sourceY * imageData.width + sourceX) * 4
+    const pixel = imageData.data
 
     return {
-      r: pixel[0],
-      g: pixel[1],
-      b: pixel[2],
-      a: pixel[3] / 255
+      r: pixel[pixelOffset],
+      g: pixel[pixelOffset + 1],
+      b: pixel[pixelOffset + 2],
+      a: pixel[pixelOffset + 3] / 255
     }
   }
 
@@ -503,7 +509,37 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
     textureMap.colorSpace = THREE.SRGBColorSpace
     textureMap.flipY = true
     textureMap.needsUpdate = true
-    setTextureRevision((revision) => revision + 1)
+  }
+
+  function reportLastUv(uv: THREE.Vector2): void {
+    pendingLastUvRef.current = `${uv.x.toFixed(3)}, ${uv.y.toFixed(3)}`
+
+    const now = performance.now()
+    if (now - lastUvUpdateAtRef.current < 80) {
+      return
+    }
+
+    flushPendingLastUv(now)
+  }
+
+  function flushPendingLastUv(now = performance.now()): void {
+    if (!pendingLastUvRef.current) {
+      return
+    }
+
+    setLastUv(pendingLastUvRef.current)
+    pendingLastUvRef.current = null
+    lastUvUpdateAtRef.current = now
+  }
+
+  function reportStatus(message: string): void {
+    const now = performance.now()
+    if (now - statusUpdateAtRef.current < 300) {
+      return
+    }
+
+    statusUpdateAtRef.current = now
+    setStatus(message)
   }
 
   function captureProjectionView(): string | null {
@@ -839,6 +875,22 @@ function brushFalloff(normalizedDistance: number, hardness: number): number {
   const smooth = t * t * (3 - 2 * t)
 
   return 1 - smooth
+}
+
+function getProjectionSampleStep(radius: number): number {
+  if (radius <= 18) {
+    return 3
+  }
+
+  if (radius <= 45) {
+    return 4
+  }
+
+  if (radius <= 75) {
+    return 6
+  }
+
+  return 8
 }
 
 function getCoveredImageRect(
