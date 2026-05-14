@@ -9,7 +9,9 @@ const api = {
     projectionViewDataUrl: string
     albedoPath?: string | null
   }) => ipcRenderer.invoke('asset:save-projection-capture', payload),
+  getProjectionPaths: (albedoPath?: string | null) => ipcRenderer.invoke('asset:get-projection-paths', albedoPath),
   loadProjectionCapture: (path?: string) => ipcRenderer.invoke('asset:load-projection-capture', path),
+  openProjectionWindow: () => ipcRenderer.invoke('app:open-projection-window'),
   resetWorkspace: () => ipcRenderer.invoke('asset:reset-workspace'),
   onResetWorkspace: (callback: () => void) => {
     const listener = (): void => callback()

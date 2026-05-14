@@ -1,11 +1,13 @@
 import { type ReactElement, useEffect, useRef, useState } from 'react'
 import {
   Brush,
+  Camera,
   Download,
   Eraser,
   Image,
   Layers,
   MousePointer2,
+  RefreshCw,
   Rotate3D,
   SlidersHorizontal,
   Upload
@@ -21,10 +23,11 @@ const modeOptions: Array<{ mode: ToolMode; label: string; icon: typeof MousePoin
 ]
 
 export function App(): ReactElement {
+  return window.location.hash === '#projection' ? <ProjectionWindow /> : <MainWindow />
+}
+
+function MainWindow(): ReactElement {
   const viewerRef = useRef<ModelViewerHandle>(null)
-  const capturingProjectionRef = useRef(false)
-  const [isCapturingProjection, setIsCapturingProjection] = useState(false)
-  const [pendingProjectionCreatedPath, setPendingProjectionCreatedPath] = useState<string | null>(null)
   const {
     model,
     texture,
@@ -40,7 +43,6 @@ export function App(): ReactElement {
     status,
     setModel,
     setTexture,
-    setProjectionImage,
     setMode,
     setBrushColor,
     setBrushSize,
@@ -78,7 +80,6 @@ export function App(): ReactElement {
     void restoreInitialAssets()
 
     const removeResetListener = window.textureTool.onResetWorkspace(() => {
-      setPendingProjectionCreatedPath(null)
       resetWorkspace()
     })
 
@@ -95,7 +96,6 @@ export function App(): ReactElement {
     }
 
     setModel(nextModel)
-    setPendingProjectionCreatedPath(null)
     setStatus(`Loaded ${nextModel.name}`)
   }
 
@@ -106,57 +106,11 @@ export function App(): ReactElement {
     }
 
     setTexture(nextTexture)
-    setPendingProjectionCreatedPath(null)
     setStatus(`Loaded ${nextTexture.name}`)
   }
 
-  async function handleCaptureProjectionImage(): Promise<void> {
-    if (capturingProjectionRef.current) {
-      return
-    }
-
-    if (pendingProjectionCreatedPath) {
-      capturingProjectionRef.current = true
-      setIsCapturingProjection(true)
-      setStatus('Reloading projection-created.png...')
-
-      try {
-        const capturedProjectionImage = await window.textureTool.loadProjectionCapture(pendingProjectionCreatedPath)
-        setProjectionImage(capturedProjectionImage)
-        setPendingProjectionCreatedPath(null)
-        setStatus(`Reloaded ${capturedProjectionImage.name}`)
-      } catch (error) {
-        setStatus(error instanceof Error ? error.message : 'Failed to reload projection capture.')
-      } finally {
-        capturingProjectionRef.current = false
-        setIsCapturingProjection(false)
-      }
-      return
-    }
-
-    const projectionViewDataUrl = viewerRef.current?.getProjectionViewDataUrl()
-    if (!projectionViewDataUrl) {
-      setStatus('Projection View is not ready to capture.')
-      return
-    }
-
-    capturingProjectionRef.current = true
-    setIsCapturingProjection(true)
-    setStatus('Capturing Projection View...')
-
-    try {
-      const capture = await window.textureTool.saveProjectionCapture({
-        projectionViewDataUrl,
-        albedoPath: texture?.path ?? null
-      })
-      setPendingProjectionCreatedPath(capture.createdPath)
-      setStatus(`Captured ${capture.capturePath}. Click Reload to load ${capture.createdPath}.`)
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : 'Failed to capture Projection View.')
-    } finally {
-      capturingProjectionRef.current = false
-      setIsCapturingProjection(false)
-    }
+  async function handleOpenProjectionWindow(): Promise<void> {
+    await window.textureTool.openProjectionWindow()
   }
 
   async function handleExport(): Promise<void> {
@@ -193,18 +147,11 @@ export function App(): ReactElement {
             <button
               type="button"
               className="tool-button"
-              onClick={handleCaptureProjectionImage}
-              disabled={isCapturingProjection}
-              title={
-                pendingProjectionCreatedPath
-                  ? 'Reload projection-created.png'
-                  : 'Capture Projection View for projection image'
-              }
+              onClick={handleOpenProjectionWindow}
+              title="Open Projection View"
             >
               <Layers size={18} />
-              <span>
-                {isCapturingProjection ? (pendingProjectionCreatedPath ? 'Reloading' : 'Capturing') : pendingProjectionCreatedPath ? 'Reload' : 'Projection'}
-              </span>
+              <span>Projection</span>
             </button>
             <button type="button" className="tool-button primary" onClick={handleExport} title="Export painted PNG">
               <Download size={18} />
@@ -339,6 +286,122 @@ export function App(): ReactElement {
           </dl>
         </section>
       </aside>
+    </main>
+  )
+}
+
+function ProjectionWindow(): ReactElement {
+  const viewerRef = useRef<ModelViewerHandle>(null)
+  const [isBusy, setIsBusy] = useState(false)
+  const [projectionCreatedPath, setProjectionCreatedPath] = useState<string | null>(null)
+  const texture = useTextureToolStore((state) => state.texture)
+  const setModel = useTextureToolStore((state) => state.setModel)
+  const setTexture = useTextureToolStore((state) => state.setTexture)
+  const setProjectionImage = useTextureToolStore((state) => state.setProjectionImage)
+  const resetWorkspace = useTextureToolStore((state) => state.resetWorkspace)
+
+  useEffect(() => {
+    let alive = true
+
+    async function restoreInitialAssets(): Promise<void> {
+      const initialAssets = await window.textureTool.loadInitialAssets()
+      if (!alive) {
+        return
+      }
+
+      if (initialAssets.model) {
+        setModel(initialAssets.model)
+      }
+
+      if (initialAssets.texture) {
+        setTexture(initialAssets.texture)
+      }
+    }
+
+    void restoreInitialAssets()
+
+    const removeResetListener = window.textureTool.onResetWorkspace(() => {
+      setProjectionCreatedPath(null)
+      resetWorkspace()
+    })
+
+    return () => {
+      alive = false
+      removeResetListener()
+    }
+  }, [resetWorkspace, setModel, setTexture])
+
+  async function resolveProjectionCreatedPath(): Promise<string> {
+    if (projectionCreatedPath) {
+      return projectionCreatedPath
+    }
+
+    const paths = await window.textureTool.getProjectionPaths(texture?.path ?? null)
+    setProjectionCreatedPath(paths.createdPath)
+
+    return paths.createdPath
+  }
+
+  async function handleCapture(): Promise<void> {
+    if (isBusy) {
+      return
+    }
+
+    const projectionViewDataUrl = viewerRef.current?.getProjectionViewDataUrl()
+    if (!projectionViewDataUrl) {
+      return
+    }
+
+    setIsBusy(true)
+    try {
+      const capture = await window.textureTool.saveProjectionCapture({
+        projectionViewDataUrl,
+        albedoPath: texture?.path ?? null
+      })
+      setProjectionCreatedPath(capture.createdPath)
+    } catch (error) {
+      console.error(error)
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  async function handleReload(): Promise<void> {
+    if (isBusy) {
+      return
+    }
+
+    setIsBusy(true)
+    try {
+      const capturedProjectionImage = await window.textureTool.loadProjectionCapture(
+        await resolveProjectionCreatedPath()
+      )
+      setProjectionImage(capturedProjectionImage)
+    } catch (error) {
+      console.error(error)
+    } finally {
+      setIsBusy(false)
+    }
+  }
+
+  return (
+    <main className="projection-window-shell">
+      <header className="projection-window-toolbar">
+        <strong>Projection View</strong>
+        <div className="projection-window-actions">
+          <button type="button" className="tool-button" onClick={handleCapture} disabled={isBusy} title="Capture">
+            <Camera size={18} />
+            <span>Capture</span>
+          </button>
+          <button type="button" className="tool-button" onClick={handleReload} disabled={isBusy} title="Reload">
+            <RefreshCw size={18} />
+            <span>Reload</span>
+          </button>
+        </div>
+      </header>
+      <section className="projection-window-stage">
+        <ModelViewer ref={viewerRef} projectionWindow />
+      </section>
     </main>
   )
 }

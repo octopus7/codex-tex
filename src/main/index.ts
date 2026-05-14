@@ -17,6 +17,8 @@ interface ProjectionCaptureResult {
   createdPath: string
 }
 
+let projectionWindow: BrowserWindow | null = null
+
 const imageMimeByExtension = new Map([
   ['.png', 'image/png'],
   ['.jpg', 'image/jpeg'],
@@ -86,19 +88,34 @@ function getProjectionDirectory(albedoPath?: string | null): string {
   return albedoPath ? dirname(albedoPath) : app.getPath('userData')
 }
 
+function getProjectionPaths(albedoPath?: string | null): ProjectionCaptureResult {
+  const outputDirectory = getProjectionDirectory(albedoPath)
+
+  return {
+    capturePath: join(outputDirectory, 'projection-capture.png'),
+    createdPath: join(outputDirectory, 'projection-created.png')
+  }
+}
+
 async function saveProjectionCapture({
   projectionViewDataUrl,
   albedoPath
 }: ProjectionCapturePayload): Promise<ProjectionCaptureResult> {
-  const outputDirectory = getProjectionDirectory(albedoPath)
-  const capturePath = join(outputDirectory, 'projection-capture.png')
-  const createdPath = join(outputDirectory, 'projection-created.png')
+  const { capturePath, createdPath } = getProjectionPaths(albedoPath)
   await writeFile(capturePath, dataUrlToBuffer(projectionViewDataUrl))
 
   return { capturePath, createdPath }
 }
 
-function setupApplicationMenu(mainWindow: BrowserWindow): void {
+function loadRendererWindow(targetWindow: BrowserWindow, hash?: string): void {
+  if (process.env.ELECTRON_RENDERER_URL) {
+    targetWindow.loadURL(`${process.env.ELECTRON_RENDERER_URL}${hash ? `#${hash}` : ''}`)
+  } else {
+    targetWindow.loadFile(join(__dirname, '../renderer/index.html'), hash ? { hash } : undefined)
+  }
+}
+
+function setupApplicationMenu(): void {
   const menu = Menu.buildFromTemplate([
     {
       label: 'File',
@@ -107,7 +124,9 @@ function setupApplicationMenu(mainWindow: BrowserWindow): void {
           label: 'Reset',
           click: async () => {
             await clearRecentAssets()
-            mainWindow.webContents.send('app:reset-workspace')
+            BrowserWindow.getAllWindows().forEach((targetWindow) => {
+              targetWindow.webContents.send('app:reset-workspace')
+            })
           }
         },
         { type: 'separator' },
@@ -154,13 +173,38 @@ function createWindow(): void {
     }
   })
 
-  setupApplicationMenu(mainWindow)
+  setupApplicationMenu()
 
-  if (process.env.ELECTRON_RENDERER_URL) {
-    mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
-  } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+  loadRendererWindow(mainWindow)
+}
+
+function openProjectionWindow(parent?: BrowserWindow | null): void {
+  if (projectionWindow && !projectionWindow.isDestroyed()) {
+    projectionWindow.focus()
+    return
   }
+
+  projectionWindow = new BrowserWindow({
+    width: 880,
+    height: 940,
+    minWidth: 680,
+    minHeight: 760,
+    backgroundColor: '#f5f4ef',
+    title: 'Codex Tex Projection',
+    parent: parent ?? undefined,
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: false,
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  })
+
+  projectionWindow.on('closed', () => {
+    projectionWindow = null
+  })
+
+  loadRendererWindow(projectionWindow, 'projection')
 }
 
 app.whenReady().then(() => {
@@ -233,8 +277,17 @@ ipcMain.handle('asset:save-projection-capture', async (_event, payload: Projecti
   return saveProjectionCapture(payload)
 })
 
+ipcMain.handle('asset:get-projection-paths', async (_event, albedoPath?: string | null) => {
+  return getProjectionPaths(albedoPath)
+})
+
 ipcMain.handle('asset:load-projection-capture', async (_event, path?: string) => {
   return loadTextureFromPath(path ?? join(app.getPath('userData'), 'projection-created.png'))
+})
+
+ipcMain.handle('app:open-projection-window', async (event) => {
+  openProjectionWindow(BrowserWindow.fromWebContents(event.sender))
+  return true
 })
 
 ipcMain.handle('asset:load-initial-assets', async () => {

@@ -19,6 +19,10 @@ export interface ModelViewerHandle {
   getProjectionViewDataUrl: () => string | null
 }
 
+interface ModelViewerProps {
+  projectionWindow?: boolean
+}
+
 interface RgbaColor {
   r: number
   g: number
@@ -47,7 +51,10 @@ async function decodeTextureDataUrl(dataUrl: string): Promise<ImageBitmap> {
   return createImageBitmap(blob)
 }
 
-export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_props, ref): ReactElement {
+export const ModelViewer = forwardRef<ModelViewerHandle, ModelViewerProps>(function ModelViewer(
+  { projectionWindow = false },
+  ref
+): ReactElement {
   const textureCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const baseTextureCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const textureRef = useRef<THREE.CanvasTexture | null>(null)
@@ -575,52 +582,45 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
     return output.toDataURL('image/png')
   }
 
-  const paintableFromAnyViewport = mode === 'paint' || mode === 'erase'
+  const paintableFromMainViewport = mode === 'paint' || mode === 'erase'
+
+  if (projectionWindow) {
+    return (
+      <div className="projection-square-viewport">
+        <div className="viewport-wrap" ref={workViewportRef}>
+          <ViewportLabel title="Projection View" subtitle="Fixed" />
+          <ViewportScene
+            modelContent={model?.content ?? null}
+            texture={editableTexture}
+            textureRevision={textureRevision}
+            controlsEnabled={false}
+          />
+          {projectionImage && (
+            <img
+              className="projection-overlay"
+              src={projectionImage.dataUrl}
+              alt=""
+              style={{ opacity: projectionOpacity }}
+              draggable={false}
+            />
+          )}
+          {!model && <EmptyOverlay title="No OBJ loaded" body="Load an OBJ in the main window first." />}
+        </div>
+      </div>
+    )
+  }
 
   return (
-    <div className="viewport-grid">
-      <div className="viewport-wrap" ref={workViewportRef}>
-        <ViewportLabel title="Projection View" subtitle={mode === 'projectionPaint' ? 'Projection Paint' : 'Work'} />
-        <ViewportScene
-          modelContent={model?.content ?? null}
-          texture={editableTexture}
-          textureRevision={textureRevision}
-          controlsEnabled={mode === 'orbit'}
-          onPointerDown={(event) => {
-            drawingRef.current = true
-            paintFromEvent(event)
-          }}
-          onPointerMove={(event) => {
-            if (drawingRef.current) {
-              paintFromEvent(event)
-            }
-          }}
-          onMissingUv={() => setStatus('The selected mesh has no UV at the pointer hit.')}
-        />
-        {projectionImage && (
-          <img
-            className="projection-overlay"
-            src={projectionImage.dataUrl}
-            alt=""
-            style={{ opacity: projectionOpacity }}
-            draggable={false}
-          />
-        )}
-        {!model && <EmptyOverlay title="No OBJ loaded" body="Use the OBJ button to start." />}
-        {model && !projectionImage && mode === 'projectionPaint' && (
-          <EmptyOverlay title="No projection image" body="Load a Projection image before painting." />
-        )}
-      </div>
-
+    <div className="viewport-single">
       <div className="viewport-wrap">
         <ViewportLabel title="Result View" subtitle="Final texture" />
         <ViewportScene
           modelContent={model?.content ?? null}
           texture={editableTexture}
           textureRevision={textureRevision}
-          controlsEnabled={!paintableFromAnyViewport}
+          controlsEnabled={!paintableFromMainViewport}
           onPointerDown={
-            paintableFromAnyViewport
+            paintableFromMainViewport
               ? (event) => {
                   drawingRef.current = true
                   paintFromEvent(event)
@@ -628,7 +628,7 @@ export const ModelViewer = forwardRef<ModelViewerHandle>(function ModelViewer(_p
               : undefined
           }
           onPointerMove={
-            paintableFromAnyViewport
+            paintableFromMainViewport
               ? (event) => {
                   if (drawingRef.current) {
                     paintFromEvent(event)
@@ -701,7 +701,7 @@ function ViewportScene({
         fadeDistance={9}
         fadeStrength={1}
       />
-      <OrbitControls enabled={controlsEnabled} makeDefault />
+      {controlsEnabled && <OrbitControls makeDefault />}
     </Canvas>
   )
 }
